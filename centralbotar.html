@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<!--
+  ════════════════════════════════════════════════════════════
+  CENTRALBOTAR — v0.1 (esqueleto inicial)
+  Fecha de esta versión: 2026-06-28
+  Primera versión funcional: login (email + Google), registro
+  automático como dueño de negocio, pantalla "Mi negocio"
+  (productos/FAQs/system prompt), pantalla "Conectar WhatsApp"
+  (credenciales + generación de verifyToken + URL del webhook),
+  y bandeja de chats en tiempo real con vista de conversación y
+  toggle de "Tomar control" (modo manual).
+  PENDIENTE (próximas versiones):
+  - Enviar mensajes manuales de verdad a WhatsApp (hoy solo se
+    guardan en Firestore; falta una función de Netlify aparte
+    para el envío saliente desde el dashboard).
+  - Pantalla "Mi equipo" (invitar agentes, patrón Rodix).
+  - Panel admin (5 toques en el logo, PIN) para ver todos los
+    negocios y controlar planes/límites.
+  - Completar firebaseConfig con los datos reales del proyecto.
+  ════════════════════════════════════════════════════════════
+-->
+<html lang="es">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>CentralbotAr</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet"/>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<style>
+:root{
+  --navy:#0f1e3d;--navy3:#1e2f55;--blue:#1d4ed8;
+  --gold:#f0b84a;--gold2:#c49020;
+  --green:#16a34a;--green-bg:#dcfce7;
+  --warn:#d97706;--warn-bg:#fef3c7;
+  --red:#dc2626;--red-bg:#fee2e2;
+  --bg:#f4f6fb;--card:#fff;--line:#dde1ec;--text:#0f1e3d;--muted:#6b7a99;
+}
+[data-theme="dark"]{
+  --bg:#0b1220;--card:#141d33;--line:#243150;--text:#e7ecf7;--muted:#8b97b8;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font-family:'Inter',sans-serif;transition:background .3s}
+.hidden{display:none!important}
+#loading-screen{position:fixed;inset:0;background:linear-gradient(145deg,var(--navy) 0%,#1a3060 100%);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:9999;gap:14px;color:#fff}
+.spin{width:32px;height:32px;border:3px solid rgba(255,255,255,.25);border-top-color:#fff;border-radius:50%;animation:sp 1s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
+.screen{display:none}
+.screen.active{display:block}
+#screen-login.active{display:flex;align-items:center;justify-content:center;min-height:100vh;background:linear-gradient(145deg,var(--navy) 0%,#1a3060 100%);padding:24px}
+.auth-box{max-width:380px;width:100%;padding:28px;border-radius:14px;background:var(--card);box-shadow:0 20px 50px rgba(0,0,0,.3)}
+.auth-box h1{margin:0;font-size:24px;font-weight:800;color:var(--navy)}
+.auth-box .sub{font-size:12px;color:var(--muted);margin-bottom:20px;letter-spacing:.04em;text-transform:uppercase}
+.field{margin-bottom:12px}
+.field label{font-size:12px;font-weight:600;color:var(--muted);display:block;margin-bottom:5px}
+input,textarea{width:100%;padding:10px 12px;border:1.5px solid var(--line);border-radius:8px;font-size:14px;font-family:inherit;background:var(--card);color:var(--text)}
+input:focus,textarea:focus,button:focus-visible{outline:2px solid var(--gold);outline-offset:1px}
+.btn-primary{width:100%;background:var(--navy);color:#fff;border:none;border-radius:8px;padding:12px;font-weight:700;font-size:14px;cursor:pointer;margin-top:6px}
+.btn-google{width:100%;background:#fff;color:#1f1f1f;border:1.5px solid var(--line);border-radius:8px;padding:11px;font-weight:600;font-size:14px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:10px;margin-top:8px}
+.btn-link{background:none;border:none;color:var(--blue);font-size:13px;cursor:pointer;width:100%;margin-top:10px}
+.err-msg{color:var(--red);font-size:12.5px;margin-top:10px;display:none}
+.err-msg.show{display:block}
+
+#screen-app{display:none}
+#screen-app.active{display:flex;min-height:100vh}
+.sidebar{width:230px;background:var(--navy);color:#fff;display:flex;flex-direction:column;padding:18px 14px;flex-shrink:0}
+.brand{font-size:19px;font-weight:800;display:flex;align-items:center;gap:8px;padding:6px 8px 22px}
+.nav-item{padding:11px 12px;border-radius:8px;cursor:pointer;font-size:14px;font-weight:600;color:rgba(255,255,255,.75);margin-bottom:4px;display:flex;align-items:center;gap:10px}
+.nav-item:hover{background:rgba(255,255,255,.06)}
+.nav-item.active{background:rgba(255,255,255,.12);color:#fff}
+.sidebar-bottom{margin-top:auto;padding-top:14px;border-top:1px solid rgba(255,255,255,.12)}
+.btn-logout{width:100%;background:transparent;border:1px solid rgba(255,255,255,.25);color:#fff;border-radius:8px;padding:9px;font-size:13px;cursor:pointer}
+.main{flex:1;padding:28px;max-width:1100px}
+.page-title{font-size:22px;font-weight:800;margin-bottom:18px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px;margin-bottom:18px}
+.btn-sm{background:var(--navy);color:#fff;border:none;border-radius:7px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer}
+.btn-sm.gold{background:var(--gold);color:var(--navy)}
+.btn-sm.outline{background:transparent;border:1.5px solid var(--navy);color:var(--navy)}
+.list-item{display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border:1px solid var(--line);border-radius:8px;margin-bottom:8px}
+.tag{font-size:11px;background:var(--green-bg);color:var(--green);padding:3px 8px;border-radius:99px;font-weight:700}
+.tag.warn{background:var(--warn-bg);color:var(--warn)}
+
+/* Bandeja de chats */
+.inbox-wrap{display:flex;gap:0;border:1px solid var(--line);border-radius:12px;overflow:hidden;height:600px;background:var(--card)}
+.conv-list{width:320px;border-right:1px solid var(--line);overflow-y:auto;flex-shrink:0}
+.conv-row{padding:13px 14px;border-bottom:1px solid var(--line);cursor:pointer;display:flex;flex-direction:column;gap:3px}
+.conv-row:hover{background:var(--bg)}
+.conv-row.active{background:var(--bg);border-left:3px solid var(--gold)}
+.conv-row .name{font-weight:700;font-size:13.5px}
+.conv-row .preview{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.chat-area{flex:1;display:flex;flex-direction:column}
+.chat-header{padding:14px 16px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center}
+.chat-msgs{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:8px}
+.bubble{max-width:70%;padding:9px 13px;border-radius:12px;font-size:13.5px;line-height:1.4}
+.bubble.cliente{background:var(--bg);align-self:flex-start}
+.bubble.bot{background:#e0e7ff;align-self:flex-end}
+.bubble.humano{background:var(--gold);color:var(--navy);align-self:flex-end}
+.chat-input{padding:12px;border-top:1px solid var(--line);display:flex;gap:8px}
+.chat-input input{flex:1}
+.empty-inbox{display:flex;align-items:center;justify-content:center;height:100%;color:var(--muted);font-size:13px}
+</style>
+</head>
+<body>
+
+<div id="loading-screen"><div class="spin"></div><div style="font-size:12px;letter-spacing:.05em">CARGANDO CENTRALBOTAR...</div></div>
+
+<!-- ───────── LOGIN / REGISTRO ───────── -->
+<div id="screen-login" class="screen">
+  <div class="auth-box">
+    <h1>CentralbotAr</h1>
+    <div class="sub">Panel de mensajes centralizado</div>
+    <div class="field"><label>Email</label><input id="f-email" type="email" placeholder="tu@negocio.com"/></div>
+    <div class="field"><label>Contraseña</label><input id="f-pass" type="password" placeholder="••••••••"/></div>
+    <button class="btn-primary" id="btn-auth">Ingresar →</button>
+    <button class="btn-link" id="btn-toggle-register">¿No tenés cuenta? Creá una</button>
+    <div style="display:flex;align-items:center;gap:10px;margin:14px 0;color:var(--muted);font-size:12px">
+      <div style="flex:1;height:1px;background:var(--line)"></div>O<div style="flex:1;height:1px;background:var(--line)"></div>
+    </div>
+    <button class="btn-google" id="btn-google">
+      <svg width="18" height="18" viewBox="0 0 48 48"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3c-1.6 4.7-6.1 8-11.3 8-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.9 1.2 8 3.1l5.7-5.7C34.6 6.1 29.6 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.7-.4-3.5z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.6 16 18.9 13 24 13c3.1 0 5.9 1.2 8 3.1l5.7-5.7C34.6 6.1 29.6 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.5 0 10.5-2.1 14-5.6l-6.5-5.3c-2 1.4-4.6 2.3-7.5 2.3-5.2 0-9.6-3.3-11.3-8l-6.6 5.1C9.6 39.6 16.3 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.3-2.2 4.3-4.1 5.7l6.5 5.3C41.4 36 44 30.5 44 24c0-1.3-.1-2.7-.4-3.5z"/></svg>
+      Ingresar con Google
+    </button>
+    <p class="err-msg" id="auth-err"></p>
+  </div>
+</div>
+
+<!-- ───────── APP ───────── -->
+<div id="screen-app" class="screen">
+  <nav class="sidebar">
+    <div class="brand">💬 CentralbotAr</div>
+    <div class="nav-item active" data-page="bandeja">📥 Bandeja de chats</div>
+    <div class="nav-item" data-page="negocio">🏪 Mi negocio</div>
+    <div class="nav-item" data-page="whatsapp">📲 Conectar WhatsApp</div>
+    <div class="sidebar-bottom">
+      <div style="font-size:12px;color:rgba(255,255,255,.6);margin-bottom:10px;word-break:break-all" id="user-email"></div>
+      <button class="btn-logout" id="btn-logout">Cerrar sesión</button>
+    </div>
+  </nav>
+
+  <main class="main">
+    <!-- Bandeja de chats -->
+    <div id="page-bandeja" class="page">
+      <div class="page-title">Bandeja de chats</div>
+      <div class="inbox-wrap">
+        <div class="conv-list" id="conv-list"><div class="empty-inbox">Cargando conversaciones...</div></div>
+        <div class="chat-area" id="chat-area"><div class="empty-inbox">Elegí una conversación de la izquierda</div></div>
+      </div>
+    </div>
+
+    <!-- Mi negocio -->
+    <div id="page-negocio" class="page hidden">
+      <div class="page-title">Mi negocio</div>
+      <div class="card">
+        <div class="field"><label>Nombre del negocio</label><input id="neg-nombre" placeholder="Ej: Distribuidora Pérez"/></div>
+        <div class="field"><label>Mensaje de bienvenida / personalidad del bot</label><textarea id="neg-prompt" rows="4" placeholder="Sos el asistente de atención al cliente de... Respondé en español rioplatense, breve y amable..."></textarea></div>
+        <button class="btn-sm gold" id="btn-guardar-negocio">💾 Guardar datos del negocio</button>
+      </div>
+
+      <div class="card">
+        <h3 style="margin-top:0">Productos</h3>
+        <div id="lista-productos"></div>
+        <div style="display:flex;gap:8px;margin-top:10px">
+          <input id="prod-nombre" placeholder="Nombre" style="flex:1"/>
+          <input id="prod-precio" placeholder="Precio" style="width:100px"/>
+          <button class="btn-sm" id="btn-add-producto">＋ Agregar</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3 style="margin-top:0">Preguntas frecuentes (FAQs)</h3>
+        <div id="lista-faqs"></div>
+        <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+          <input id="faq-pregunta" placeholder="Pregunta" style="flex:1;min-width:200px"/>
+          <input id="faq-respuesta" placeholder="Respuesta" style="flex:1;min-width:200px"/>
+          <button class="btn-sm" id="btn-add-faq">＋ Agregar</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Conectar WhatsApp -->
+    <div id="page-whatsapp" class="page hidden">
+      <div class="page-title">Conectar WhatsApp</div>
+      <div class="card">
+        <p style="font-size:13px;color:var(--muted);margin-top:0">
+          Necesitás tu propia app en Meta for Developers con el producto WhatsApp agregado.
+          Pegá aquí el <strong>Phone Number ID</strong> y el <strong>token de acceso</strong> que te dio Meta.
+        </p>
+        <div class="field"><label>Phone Number ID</label><input id="wa-phoneid" placeholder="Ej: 123456789012345"/></div>
+        <div class="field"><label>Token de acceso (permanente)</label><input id="wa-token" type="password" placeholder="EAAxxxxxxxxxxxxx"/></div>
+        <button class="btn-sm gold" id="btn-guardar-whatsapp">💾 Guardar y generar datos del webhook</button>
+        <div id="wa-resultado" style="margin-top:16px;display:none">
+          <div class="field"><label>URL del webhook (pegala en Meta)</label><input id="wa-url" readonly/></div>
+          <div class="field"><label>Token de verificación (pegalo en Meta)</label><input id="wa-verify" readonly/></div>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script>
+// ============== CONFIGURACIÓN FIREBASE — COMPLETAR ANTES DE SUBIR ==============
+const firebaseConfig = {
+  apiKey: "AIzaSyAuqaY4zgJPCXNRnlP-cXxi7tQyRWVfQ9w",
+  authDomain: "centralbotar.firebaseapp.com",
+  projectId: "centralbotar",
+  storageBucket: "centralbotar.firebasestorage.app",
+  messagingSenderId: "249537296056",
+  appId: "1:249537296056:web:62fddedf252fb8f7eb664d"
+};
+firebase.initializeApp(firebaseConfig);
+const auth = firebase.auth();
+const db = firebase.firestore();
+
+let currentUser = null, userDoc = null, negocioId = null, isRegister = false;
+let unsubConvs = null, unsubMsgs = null, conversaciones = [], convActivaId = null;
+
+// ───────── AUTH ─────────
+document.getElementById('btn-toggle-register').addEventListener('click', () => {
+  isRegister = !isRegister;
+  document.getElementById('btn-auth').textContent = isRegister ? 'Crear cuenta →' : 'Ingresar →';
+  document.getElementById('btn-toggle-register').textContent = isRegister ? '¿Ya tenés cuenta? Ingresá' : '¿No tenés cuenta? Creá una';
+});
+
+document.getElementById('btn-auth').addEventListener('click', async () => {
+  const email = document.getElementById('f-email').value.trim();
+  const pass = document.getElementById('f-pass').value;
+  const errEl = document.getElementById('auth-err');
+  errEl.classList.remove('show');
+  if (!email || !pass) { errEl.textContent = 'Completá email y contraseña.'; errEl.classList.add('show'); return; }
+  const btn = document.getElementById('btn-auth'); btn.disabled = true;
+  try {
+    if (isRegister) await auth.createUserWithEmailAndPassword(email, pass);
+    else await auth.signInWithEmailAndPassword(email, pass);
+  } catch (e) {
+    errEl.textContent = 'Error: ' + e.message; errEl.classList.add('show');
+  }
+  btn.disabled = false;
+});
+
+document.getElementById('btn-google').addEventListener('click', async () => {
+  const errEl = document.getElementById('auth-err');
+  errEl.classList.remove('show');
+  try { await auth.signInWithPopup(new firebase.auth.GoogleAuthProvider()); }
+  catch (e) { errEl.textContent = 'No se pudo ingresar con Google: ' + e.message; errEl.classList.add('show'); }
+});
+
+document.getElementById('btn-logout').addEventListener('click', () => auth.signOut());
+
+auth.onAuthStateChanged(async user => {
+  currentUser = user;
+  document.getElementById('loading-screen').classList.add('hidden');
+  if (!user) {
+    document.getElementById('screen-app').classList.remove('active');
+    document.getElementById('screen-login').classList.add('active');
+    if (unsubConvs) unsubConvs();
+    if (unsubMsgs) unsubMsgs();
+    return;
+  }
+
+  const userRef = db.collection('usuarios').doc(user.uid);
+  let snap = await userRef.get();
+  if (!snap.exists) {
+    await userRef.set({ email: user.email, negocioId: user.uid, rolNegocio: 'owner', creadoEn: firebase.firestore.FieldValue.serverTimestamp() });
+    snap = await userRef.get();
+  }
+  userDoc = snap.data();
+  negocioId = userDoc.negocioId;
+
+  const negRef = db.collection('negocios').doc(negocioId);
+  const negSnap = await negRef.get();
+  if (!negSnap.exists) {
+    await negRef.set({
+      nombreNegocio: '', ownerUid: user.uid, systemPrompt: '', productos: [], faqs: [],
+      whatsapp: {}, features: { limiteMensajesMes: 200, handoffNivel: 'medio' },
+      mensajesEsteMes: 0, creadoEn: firebase.firestore.FieldValue.serverTimestamp(),
+    });
+  }
+
+  document.getElementById('user-email').textContent = user.email;
+  document.getElementById('screen-login').classList.remove('active');
+  document.getElementById('screen-app').classList.add('active');
+  cargarPantallaNegocio();
+  iniciarBandeja();
+});
+
+// ───────── NAVEGACIÓN ─────────
+document.querySelectorAll('.nav-item').forEach(item => {
+  item.addEventListener('click', () => {
+    document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
+    item.classList.add('active');
+    document.querySelectorAll('.page').forEach(p => p.classList.add('hidden'));
+    document.getElementById('page-' + item.dataset.page).classList.remove('hidden');
+  });
+});
+
+// ───────── MI NEGOCIO ─────────
+let negocioData = null;
+async function cargarPantallaNegocio() {
+  const negSnap = await db.collection('negocios').doc(negocioId).get();
+  negocioData = negSnap.data() || {};
+  document.getElementById('neg-nombre').value = negocioData.nombreNegocio || '';
+  document.getElementById('neg-prompt').value = negocioData.systemPrompt || '';
+  renderProductos();
+  renderFaqs();
+}
+
+function renderProductos() {
+  const cont = document.getElementById('lista-productos');
+  const prods = negocioData.productos || [];
+  cont.innerHTML = prods.length ? prods.map((p, i) => `
+    <div class="list-item"><span>${p.nombre} — $${p.precio}</span><button class="btn-sm outline" data-del-prod="${i}">Quitar</button></div>
+  `).join('') : '<p style="font-size:13px;color:var(--muted)">Sin productos cargados.</p>';
+  cont.querySelectorAll('[data-del-prod]').forEach(b => b.addEventListener('click', async () => {
+    prods.splice(Number(b.dataset.delProd), 1);
+    await db.collection('negocios').doc(negocioId).update({ productos: prods });
+    renderProductos();
+  }));
+}
+document.getElementById('btn-add-producto').addEventListener('click', async () => {
+  const nombre = document.getElementById('prod-nombre').value.trim();
+  const precio = document.getElementById('prod-precio').value.trim();
+  if (!nombre) return;
+  negocioData.productos = negocioData.productos || [];
+  negocioData.productos.push({ nombre, precio });
+  await db.collection('negocios').doc(negocioId).update({ productos: negocioData.productos });
+  document.getElementById('prod-nombre').value = ''; document.getElementById('prod-precio').value = '';
+  renderProductos();
+});
+
+function renderFaqs() {
+  const cont = document.getElementById('lista-faqs');
+  const faqs = negocioData.faqs || [];
+  cont.innerHTML = faqs.length ? faqs.map((f, i) => `
+    <div class="list-item"><span><strong>${f.pregunta}</strong> — ${f.respuesta}</span><button class="btn-sm outline" data-del-faq="${i}">Quitar</button></div>
+  `).join('') : '<p style="font-size:13px;color:var(--muted)">Sin preguntas frecuentes cargadas.</p>';
+  cont.querySelectorAll('[data-del-faq]').forEach(b => b.addEventListener('click', async () => {
+    faqs.splice(Number(b.dataset.delFaq), 1);
+    await db.collection('negocios').doc(negocioId).update({ faqs });
+    renderFaqs();
+  }));
+}
+document.getElementById('btn-add-faq').addEventListener('click', async () => {
+  const pregunta = document.getElementById('faq-pregunta').value.trim();
+  const respuesta = document.getElementById('faq-respuesta').value.trim();
+  if (!pregunta || !respuesta) return;
+  negocioData.faqs = negocioData.faqs || [];
+  negocioData.faqs.push({ pregunta, respuesta });
+  await db.collection('negocios').doc(negocioId).update({ faqs: negocioData.faqs });
+  document.getElementById('faq-pregunta').value = ''; document.getElementById('faq-respuesta').value = '';
+  renderFaqs();
+});
+
+document.getElementById('btn-guardar-negocio').addEventListener('click', async () => {
+  const btn = document.getElementById('btn-guardar-negocio'); btn.disabled = true; btn.textContent = 'Guardando...';
+  await db.collection('negocios').doc(negocioId).update({
+    nombreNegocio: document.getElementById('neg-nombre').value.trim(),
+    systemPrompt: document.getElementById('neg-prompt').value.trim(),
+  });
+  btn.disabled = false; btn.textContent = '✅ Guardado';
+  setTimeout(() => { btn.textContent = '💾 Guardar datos del negocio'; }, 2000);
+});
+
+// ───────── CONECTAR WHATSAPP ─────────
+document.getElementById('btn-guardar-whatsapp').addEventListener('click', async () => {
+  const phoneNumberId = document.getElementById('wa-phoneid').value.trim();
+  const token = document.getElementById('wa-token').value.trim();
+  if (!phoneNumberId || !token) { alert('Completá los dos campos.'); return; }
+  const verifyToken = 'cba_' + Math.random().toString(36).slice(2, 12);
+  const btn = document.getElementById('btn-guardar-whatsapp'); btn.disabled = true; btn.textContent = 'Guardando...';
+  await db.collection('negocios').doc(negocioId).update({
+    whatsapp: { phoneNumberId, token, verifyToken },
+  });
+  const urlWebhook = `${window.location.origin}/.netlify/functions/webhookWhatsapp?negocioId=${negocioId}`;
+  document.getElementById('wa-url').value = urlWebhook;
+  document.getElementById('wa-verify').value = verifyToken;
+  document.getElementById('wa-resultado').style.display = 'block';
+  btn.disabled = false; btn.textContent = '✅ Guardado';
+  setTimeout(() => { btn.textContent = '💾 Guardar y generar datos del webhook'; }, 2000);
+});
+
+// ───────── BANDEJA DE CHATS ─────────
+function iniciarBandeja() {
+  if (unsubConvs) unsubConvs();
+  unsubConvs = db.collection('negocios').doc(negocioId).collection('conversaciones')
+    .orderBy('ultimoMensajeFecha', 'desc')
+    .onSnapshot(snap => {
+      conversaciones = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      renderConvList();
+    }, err => {
+      document.getElementById('conv-list').innerHTML = `<div class="empty-inbox">Error: ${err.message}</div>`;
+    });
+}
+
+function renderConvList() {
+  const cont = document.getElementById('conv-list');
+  if (!conversaciones.length) { cont.innerHTML = '<div class="empty-inbox">Todavía no llegó ningún mensaje.</div>'; return; }
+  cont.innerHTML = conversaciones.map(c => `
+    <div class="conv-row ${c.id === convActivaId ? 'active' : ''}" data-id="${c.id}">
+      <div class="name">${(c.nombre || c.id)}</div>
+      <div class="preview">${(c.ultimoMensaje || '').slice(0, 50)}</div>
+    </div>
+  `).join('');
+  cont.querySelectorAll('.conv-row').forEach(row => row.addEventListener('click', () => abrirConversacion(row.dataset.id)));
+}
+
+function abrirConversacion(telefono) {
+  convActivaId = telefono;
+  renderConvList();
+  const conv = conversaciones.find(c => c.id === telefono);
+  const area = document.getElementById('chat-area');
+  area.innerHTML = `
+    <div class="chat-header">
+      <div><strong>${conv.nombre || telefono}</strong><div style="font-size:12px;color:var(--muted)">${telefono}</div></div>
+      <button class="btn-sm ${conv.modoManual ? 'gold' : 'outline'}" id="btn-modo-manual">${conv.modoManual ? '🤖 Devolver al bot' : '🙋 Tomar control'}</button>
+    </div>
+    <div class="chat-msgs" id="chat-msgs"><div class="empty-inbox">Cargando mensajes...</div></div>
+    <div class="chat-input">
+      <input id="chat-input-text" placeholder="Escribí una respuesta..."/>
+      <button class="btn-sm gold" id="btn-enviar-manual">Enviar</button>
+    </div>
+  `;
+  document.getElementById('btn-modo-manual').addEventListener('click', async () => {
+    await db.collection('negocios').doc(negocioId).collection('conversaciones').doc(telefono).update({ modoManual: !conv.modoManual });
+  });
+  document.getElementById('btn-enviar-manual').addEventListener('click', () => enviarManual(telefono));
+  document.getElementById('chat-input-text').addEventListener('keydown', e => { if (e.key === 'Enter') enviarManual(telefono); });
+
+  if (unsubMsgs) unsubMsgs();
+  unsubMsgs = db.collection('negocios').doc(negocioId).collection('conversaciones').doc(telefono)
+    .collection('mensajes').orderBy('timestamp', 'asc')
+    .onSnapshot(snap => {
+      const msgsEl = document.getElementById('chat-msgs');
+      if (!msgsEl) return;
+      msgsEl.innerHTML = snap.docs.map(d => {
+        const m = d.data();
+        return `<div class="bubble ${m.autor}">${m.texto}</div>`;
+      }).join('');
+      msgsEl.scrollTop = msgsEl.scrollHeight;
+    });
+}
+
+async function enviarManual(telefono) {
+  const input = document.getElementById('chat-input-text');
+  const texto = input.value.trim();
+  if (!texto) return;
+  input.value = '';
+  // NOTA: esto guarda el mensaje en Firestore, pero todavía NO lo envía de
+  // verdad a WhatsApp — falta la función de Netlify para el envío saliente.
+  // Pendiente de la próxima versión.
+  await db.collection('negocios').doc(negocioId).collection('conversaciones').doc(telefono)
+    .collection('mensajes').add({ texto, autor: 'humano', timestamp: firebase.firestore.FieldValue.serverTimestamp() });
+  await db.collection('negocios').doc(negocioId).collection('conversaciones').doc(telefono)
+    .update({ ultimoMensaje: texto, ultimoMensajeFecha: firebase.firestore.FieldValue.serverTimestamp() });
+}
+</script>
+</body>
+</html>
