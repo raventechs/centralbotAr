@@ -371,7 +371,7 @@ document.getElementById('btn-guardar-whatsapp').addEventListener('click', async 
   await db.collection('negocios').doc(negocioId).update({
     whatsapp: { phoneNumberId, token, verifyToken },
   });
-  const urlWebhook = `${window.location.origin}/.netlify/functions/webhookWhatsapp?negocioId=${negocioId}`;
+  const urlWebhook = `https://WORKER-CENTRALBOTAR.rgaraventa.workers.dev?negocioId=${negocioId}`; // ← reemplazar con URL del Cloudflare Worker
   document.getElementById('wa-url').value = urlWebhook;
   document.getElementById('wa-verify').value = verifyToken;
   document.getElementById('wa-resultado').style.display = 'block';
