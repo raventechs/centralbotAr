@@ -24,6 +24,11 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>CentralbotAr</title>
+<meta name="theme-color" content="#8E44AD">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="CentralbotAR">
+<link rel="manifest" href="manifest.json">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet"/>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
@@ -452,6 +457,13 @@ async function enviarManual(telefono) {
     .collection('mensajes').add({ texto, autor: 'humano', timestamp: firebase.firestore.FieldValue.serverTimestamp() });
   await db.collection('negocios').doc(negocioId).collection('conversaciones').doc(telefono)
     .update({ ultimoMensaje: texto, ultimoMensajeFecha: firebase.firestore.FieldValue.serverTimestamp() });
+}
+</script>
+<script>
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', function() {
+    navigator.serviceWorker.register('/sw.js').catch(function(e){console.log('SW:',e);});
+  });
 }
 </script>
 </body>
