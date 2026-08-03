@@ -105,6 +105,42 @@ input:focus,textarea:focus,button:focus-visible{outline:2px solid var(--gold);ou
 .chat-input input{flex:1}
 .empty-inbox{display:flex;align-items:center;justify-content:center;height:100%;color:var(--muted);font-size:13px}
 </style>
+<script>
+// RavenTechs PWA Banner v1.1 — en el HEAD para capturar beforeinstallprompt temprano
+var __rtPWA = (function() {
+  var deferred = null;
+  window.addEventListener('beforeinstallprompt', function(e) {
+    e.preventDefault();
+    deferred = e;
+    if (!localStorage.getItem('pwa_installed') && !localStorage.getItem('pwa_rechazado')) {
+      setTimeout(function() {
+        var b = document.getElementById('bannerPWA');
+        if (b) b.style.display = 'flex';
+      }, 2000);
+    }
+  });
+  window.addEventListener('appinstalled', function() {
+    localStorage.setItem('pwa_installed', '1');
+    var b = document.getElementById('bannerPWA');
+    if (b) b.style.display = 'none';
+  });
+  return {
+    instalar: function() {
+      if (!deferred) return;
+      document.getElementById('bannerPWA').style.display = 'none';
+      deferred.prompt();
+      deferred.userChoice.then(function(c) {
+        if (c.outcome === 'accepted') localStorage.setItem('pwa_installed', '1');
+        deferred = null;
+      });
+    },
+    rechazar: function() {
+      document.getElementById('bannerPWA').style.display = 'none';
+      localStorage.setItem('pwa_rechazado', '1');
+    }
+  };
+})();
+</script>
 </head>
 <body>
 
@@ -465,36 +501,6 @@ if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/sw.js').catch(function(e){console.log('SW:',e);});
   });
 }
-</script>
-<div id="bannerPWA" style="display:none;position:fixed;bottom:76px;left:12px;right:12px;z-index:9999;background:#1a1a2e;color:#fff;border-radius:16px;padding:14px 16px;align-items:center;gap:12px;box-shadow:0 6px 24px rgba(0,0,0,.3)"><div style="font-size:26px">📲</div><div style="flex:1"><div style="font-weight:800;font-size:14px">Instalá CentralbotAR</div><div style="font-size:12px;opacity:.75;margin-top:1px">Queda en el teléfono como una app</div></div><div style="display:flex;flex-direction:column;gap:5px"><button id="btnInstalarPWA" style="background:#8E44AD;color:#fff;font-weight:800;font-size:13px;padding:8px 13px;border-radius:10px;border:none;cursor:pointer">Instalar</button><button id="btnRechazarPWA" style="font-size:11px;color:rgba(255,255,255,.6);background:none;border:none;cursor:pointer">Ahora no</button></div></div>
-<script>
-// Estándar RavenTechs Onboarding — banner PWA
-(function(){{
-  var di=null;
-  window.addEventListener('beforeinstallprompt',function(e){{
-    e.preventDefault();di=e;
-    if(!localStorage.getItem('pwa_installed')&&!localStorage.getItem('pwa_rechazado'))
-      setTimeout(function(){{var b=document.getElementById('bannerPWA');if(b)b.style.display='flex';}},3000);
-  }});
-  window.addEventListener('appinstalled',function(){{
-    localStorage.setItem('pwa_installed','1');
-    var b=document.getElementById('bannerPWA');if(b)b.style.display='none';
-  }});
-  var bi=document.getElementById('btnInstalarPWA');
-  if(bi)bi.addEventListener('click',function(){{
-    if(!di)return;
-    document.getElementById('bannerPWA').style.display='none';
-    di.prompt();di.userChoice.then(function(c){{
-      if(c.outcome==='accepted')localStorage.setItem('pwa_installed','1');
-      di=null;
-    }});
-  }});
-  var br=document.getElementById('btnRechazarPWA');
-  if(br)br.addEventListener('click',function(){{
-    document.getElementById('bannerPWA').style.display='none';
-    localStorage.setItem('pwa_rechazado','1');
-  }});
-}})();
 </script>
 </body>
 </html>
