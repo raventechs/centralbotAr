@@ -3,7 +3,7 @@
   "short_name": "CentralbotAR",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#FAFAFA",
+  "background_color": "#FFFFFF",
   "theme_color": "#8E44AD",
   "lang": "es",
   "icons": [
