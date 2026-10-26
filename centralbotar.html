@@ -1,8 +1,10 @@
 <!DOCTYPE html>
 <!--
   ════════════════════════════════════════════════════════════
-  CENTRALBOTAR — v0.1 (esqueleto inicial)
-  Fecha de esta versión: 2026-06-28
+  CENTRALBOTAR — v0.2
+  Fecha de esta versión: 2026-10-26
+  v0.2: BACKUP (no tenía): automático diario + manual + restaurar en "Mi negocio" (sin el token de WhatsApp).
+  v0.1 (esqueleto inicial) — 2026-06-28
   Primera versión funcional: login (email + Google), registro
   automático como dueño de negocio, pantalla "Mi negocio"
   (productos/FAQs/system prompt), pantalla "Conectar WhatsApp"
@@ -217,6 +219,16 @@ var __rtPWA = (function() {
           <button class="btn-sm" id="btn-add-faq">＋ Agregar</button>
         </div>
       </div>
+      <div class="card">
+        <h3 style="margin-top:0">💾 Backup de datos</h3>
+        <p style="font-size:13px;color:var(--muted,#64748b);margin-bottom:12px">Una copia del negocio (nombre, personalidad del bot, productos, FAQs) y de todas las conversaciones. Se baja sola una vez por día al entrar; también podés bajarla cuando quieras o restaurar una anterior. La conexión de WhatsApp (token) no va al archivo.</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn-sm gold" onclick="generarBackup(false)">📥 Descargar backup ahora</button>
+          <button class="btn-sm outline" onclick="document.getElementById('inputRestaurarBackup').click()">📤 Restaurar desde un archivo</button>
+          <input type="file" id="inputRestaurarBackup" accept=".json,application/json" style="display:none" onchange="restaurarBackup(this)">
+        </div>
+        <p style="font-size:12px;margin-top:10px">Último backup: <span id="ultimoBackupFecha">—</span> · <span id="bkMsg"></span></p>
+      </div>
     </div>
 
     <!-- Conectar WhatsApp -->
@@ -323,7 +335,127 @@ auth.onAuthStateChanged(async user => {
   document.getElementById('screen-app').classList.add('active');
   cargarPantallaNegocio();
   iniciarBandeja();
+  chequearBackupDiario();   // v0.2: backup automático diario
 });
+
+// ══════════ BACKUP ESTÁNDAR 0.2 ══════════
+function _bkHoy() {
+  const d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+function _bkSer(v) {
+  if (v && typeof v === 'object') {
+    if (typeof v.toMillis === 'function' && 'seconds' in v && 'nanoseconds' in v) return { __ts: [v.seconds, v.nanoseconds] };
+    if (Array.isArray(v)) return v.map(_bkSer);
+    const o = {}; Object.keys(v).forEach(k => { o[k] = _bkSer(v[k]); }); return o;
+  }
+  return v;
+}
+function _bkRev(v) {
+  if (v && typeof v === 'object') {
+    if (Array.isArray(v)) return v.map(_bkRev);
+    if (Array.isArray(v.__ts) && v.__ts.length === 2) return new firebase.firestore.Timestamp(v.__ts[0], v.__ts[1]);
+    const o = {}; Object.keys(v).forEach(k => { o[k] = _bkRev(v[k]); }); return o;
+  }
+  return v;
+}
+async function _bkLeer(ref) {
+  const s = await ref.get();
+  return s.docs.map(d => Object.assign({ _id: d.id }, _bkSer(d.data())));
+}
+function _bkIdb(fecha, json) {
+  return new Promise(function (res) {
+    try {
+      const rq = indexedDB.open('centralbotar-backup', 1);
+      rq.onupgradeneeded = function () { rq.result.createObjectStore('b', { keyPath: 'fecha' }); };
+      rq.onsuccess = function () {
+        const idb = rq.result, tx = idb.transaction('b', 'readwrite'), st = tx.objectStore('b');
+        st.put({ fecha: fecha, json: json });
+        st.getAllKeys().onsuccess = function (e) { const ks = e.target.result.sort(); while (ks.length > 7) st.delete(ks.shift()); };
+        tx.oncomplete = function () { idb.close(); res(true); };
+        tx.onerror = tx.onabort = function () { idb.close(); res(false); };
+      };
+      rq.onerror = function () { res(false); };
+    } catch (e) { res(false); }
+  });
+}
+function _bkDescargar(json, fecha) {
+  const blob = new Blob([json], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'centralbotar-backup-' + fecha + '.json';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+}
+
+// Automático una vez por día al entrar el dueño (baja un JSON y deja copia en IndexedDB), manual y restaurar en "Mi negocio".
+// Incluye: datos del negocio (nombre, personalidad del bot, productos, FAQs) y TODAS las conversaciones con sus mensajes.
+// NUNCA incluye el token de WhatsApp (ni el de verificación): es una credencial y el archivo queda en tu dispositivo.
+function _bkMsg(m, err) { const el = document.getElementById('bkMsg'); if (el) { el.textContent = m; el.style.color = err ? '#b91c1c' : '#15803d'; } if (err) console.warn(m); }
+function _bkPuede() { return !!(currentUser && userDoc && negocioId && userDoc.rolNegocio === 'owner'); }
+async function _bkCommit(ops) {
+  for (let i = 0; i < ops.length; i += 400) {
+    const batch = db.batch();
+    ops.slice(i, i + 400).forEach(function (o) { batch.set(o[0], o[1], { merge: true }); });
+    await batch.commit();
+  }
+}
+async function generarBackup(silencioso) {
+  if (!_bkPuede()) { if (!silencioso) _bkMsg('Solo el dueño del negocio puede hacer el backup', true); return; }
+  try {
+    if (!silencioso) _bkMsg('Preparando backup…');
+    const nref = db.collection('negocios').doc(negocioId);
+    const ns = await nref.get();
+    const neg = ns.exists ? _bkSer(ns.data()) : {};
+    delete neg.whatsapp;                       // credenciales: nunca al archivo
+    const convs = [];
+    const cs = await nref.collection('conversaciones').get();
+    for (const c of cs.docs) {
+      const msgs = await _bkLeer(nref.collection('conversaciones').doc(c.id).collection('mensajes'));
+      convs.push(Object.assign({ _id: c.id }, _bkSer(c.data()), { _mensajes: msgs }));
+    }
+    const fecha = _bkHoy();
+    const json = JSON.stringify({ app: 'CentralbotAr', version: '0.2', fecha: new Date().toISOString(), negocioId: negocioId, negocio: neg, conversaciones: convs });
+    _bkDescargar(json, fecha);
+    await _bkIdb(fecha, json);
+    try { localStorage.setItem('centralbotar-ultimo-backup', fecha); } catch (e) {}
+    const el = document.getElementById('ultimoBackupFecha'); if (el) el.textContent = fecha;
+    if (!silencioso) _bkMsg('✅ Backup descargado');
+  } catch (e) { console.warn('generarBackup', e); if (!silencioso) _bkMsg('Error al generar backup: ' + (e.code || e.message), true); }
+}
+async function restaurarBackup(input) {
+  const file = input.files && input.files[0];
+  if (!file) return;
+  try {
+    if (!_bkPuede()) { _bkMsg('Solo el dueño del negocio puede restaurar', true); return; }
+    const bk = JSON.parse(await file.text());
+    if (bk.app !== 'CentralbotAr' || !bk.negocio) { _bkMsg('El archivo no es un backup de CentralbotAr', true); return; }
+    const nref = db.collection('negocios').doc(negocioId);
+    const ops = [];
+    // del negocio solo vuelven los datos propios; plan/límites, contador de mensajes y WhatsApp quedan como están
+    const n = bk.negocio, datos = {};
+    ['nombreNegocio', 'systemPrompt', 'productos', 'faqs'].forEach(function (k) { if (n[k] !== undefined) datos[k] = _bkRev(n[k]); });
+    ops.push([nref, datos]);
+    (bk.conversaciones || []).forEach(function (c) {
+      const r = Object.assign({}, c), id = r._id, ms = r._mensajes || []; delete r._id; delete r._mensajes; if (!id) return;
+      ops.push([nref.collection('conversaciones').doc(id), _bkRev(r)]);
+      ms.forEach(function (m) { const y = Object.assign({}, m), mid = y._id; delete y._id; if (mid) ops.push([nref.collection('conversaciones').doc(id).collection('mensajes').doc(mid), _bkRev(y)]); });
+    });
+    if (!confirm('Se van a volver a cargar los datos del negocio y ' + (bk.conversaciones || []).length + ' conversación(es) (' + (ops.length - 1) + ' registros). Lo que ya existe se reemplaza por lo del archivo; el resto queda como está. La conexión de WhatsApp no se toca. ¿Continuar?')) return;
+    _bkMsg('Restaurando…');
+    await _bkCommit(ops);
+    _bkMsg('✅ Backup restaurado (' + ops.length + ' registros)');
+    setTimeout(function () { location.reload(); }, 1500);
+  } catch (e) { console.warn('restaurarBackup', e); _bkMsg('Error al restaurar: ' + (e.code || e.message), true); }
+  finally { input.value = ''; }
+}
+function chequearBackupDiario() {
+  if (!_bkPuede()) return;
+  let ultimo = null; try { ultimo = localStorage.getItem('centralbotar-ultimo-backup'); } catch (e) {}
+  const el = document.getElementById('ultimoBackupFecha'); if (el && ultimo) el.textContent = ultimo;
+  if (ultimo !== _bkHoy()) setTimeout(function () { generarBackup(true); }, 8000);
+}
+// ══════════ FIN BACKUP ══════════
 
 // ───────── NAVEGACIÓN ─────────
 document.querySelectorAll('.nav-item').forEach(item => {
