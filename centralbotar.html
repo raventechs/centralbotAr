@@ -180,6 +180,69 @@ var __rtPWA = (function() {
   window.__rtPWA2={mostrar:mostrar};
 })();
 </script>
+<script id="rt-login-v1">
+/* RavenTechs · Login v1 — (A) «Continuar con Google» arriba y email como segunda opción; (B) recuerda la cuenta Google para no volver a elegirla (login_hint). No toca datos. */
+(function(){
+  function ls(k,v){try{if(v===undefined)return localStorage.getItem(k);localStorage.setItem(k,v);}catch(e){return null;}}
+  /* B — recordar la cuenta Google: se lee del usuario que Firebase ya guardó en el teléfono */
+  function capturar(){
+    try{
+      if(!indexedDB||!indexedDB.databases)return;
+      indexedDB.databases().then(function(l){
+        if(!l.some(function(d){return d.name==='firebaseLocalStorageDb';}))return;
+        var r=indexedDB.open('firebaseLocalStorageDb');
+        r.onsuccess=function(){var db=r.result;try{
+          if(!db.objectStoreNames.contains('firebaseLocalStorage')){db.close();return;}
+          var q=db.transaction('firebaseLocalStorage','readonly').objectStore('firebaseLocalStorage').getAll();
+          q.onsuccess=function(){(q.result||[]).forEach(function(it){var u=it&&it.value;
+            if(u&&u.email&&!u.isAnonymous&&(u.providerData||[]).some(function(p){return p.providerId==='google.com';}))ls('rt_google_email',u.email);});db.close();};
+        }catch(e){try{db.close();}catch(x){}}};
+      }).catch(function(){});
+    }catch(e){}
+  }
+  capturar();var n=0,t=setInterval(function(){capturar();if(++n>20)clearInterval(t);},4000);
+  window.addEventListener('focus',capturar);
+  window.rtHasHint=function(){return !!ls('rt_google_email');};
+  window.rtProv=function(p){var e=ls('rt_google_email');try{if(e&&p&&p.setCustomParameters)p.setCustomParameters({login_hint:e});}catch(x){}return p;};
+  /* A — Google primero */
+  var OR=/^(o|ó|or|—|-|–|o ingresá con|o ingresa con)$/i;
+  function visible(e){return !!(e&&(e.offsetWidth||e.offsetHeight||e.getClientRects().length));}
+  function ordenar(){
+    var bs=[].slice.call(document.querySelectorAll('button'));
+    bs.forEach(function(g){
+      if(g.getAttribute('data-rt-login'))return;
+      var tx=(g.textContent||'').trim();
+      var esG=/google/i.test(g.id||'')||/google/i.test(typeof g.className==='string'?g.className:'')||(/google/i.test(tx)&&tx.length<60);
+      if(!esG)return;
+      var a=g.parentElement,F=null;
+      while(a&&a!==document.body){
+        var inp=a.querySelector('input[type=email],input[type=password],input[type=text],input:not([type])');
+        if(inp&&!g.contains(inp)){
+          var c=a.firstElementChild;F=null;
+          while(c){if(c.contains(inp)){F=c;break;}c=c.nextElementSibling;}
+          var G=g;while(G&&G.parentElement!==a)G=G.parentElement;
+          if(F&&G&&F!==G&&(F.compareDocumentPosition(G)&Node.DOCUMENT_POSITION_FOLLOWING)){
+            g.setAttribute('data-rt-login','1');
+            var prev=G.previousElementSibling;
+            if(prev&&prev!==F&&OR.test((prev.textContent||'').trim())&&!prev.querySelector('input,button'))prev.style.display='none';
+            G.style.marginBottom='10px';G.style.width='100%';
+            a.insertBefore(G,F);
+            var d=document.createElement('div');d.className='rt-or';
+            d.style.cssText='display:flex;align-items:center;gap:8px;margin:6px 0 12px;font-size:12px;opacity:.7;text-align:center';
+            d.innerHTML='<span style="flex:1;height:1px;background:currentColor;opacity:.35"></span>o con tu email<span style="flex:1;height:1px;background:currentColor;opacity:.35"></span>';
+            a.insertBefore(d,F);
+            return;
+          }
+          if(F)return;
+        }
+        a=a.parentElement;
+      }
+    });
+  }
+  function iniciar(){ordenar();try{var mo=new MutationObserver(function(){ordenar();});mo.observe(document.documentElement,{childList:true,subtree:true});setTimeout(function(){mo.disconnect();},20000);}catch(e){}}
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',iniciar);else iniciar();
+})();
+</script>
 </head>
 <body>
 
@@ -331,7 +394,7 @@ document.getElementById('btn-auth').addEventListener('click', async () => {
 document.getElementById('btn-google').addEventListener('click', async () => {
   const errEl = document.getElementById('auth-err');
   errEl.classList.remove('show');
-  try { await auth.signInWithPopup(new firebase.auth.GoogleAuthProvider()); }
+  try { await auth.signInWithPopup((window.rtProv||function(p){return p})(new firebase.auth.GoogleAuthProvider())); }
   catch (e) { errEl.textContent = 'No se pudo ingresar con Google: ' + e.message; errEl.classList.add('show'); }
 });
 
