@@ -194,14 +194,19 @@ var __rtPWA = (function() {
         r.onsuccess=function(){var db=r.result;try{
           if(!db.objectStoreNames.contains('firebaseLocalStorage')){db.close();return;}
           var q=db.transaction('firebaseLocalStorage','readonly').objectStore('firebaseLocalStorage').getAll();
-          q.onsuccess=function(){(q.result||[]).forEach(function(it){var u=it&&it.value;
-            if(u&&u.email&&!u.isAnonymous&&(u.providerData||[]).some(function(p){return p.providerId==='google.com';}))ls('rt_google_email',u.email);});db.close();};
+          q.onsuccess=function(){var adm=false;(q.result||[]).forEach(function(it){var u=it&&it.value;
+            if(u&&u.email&&!u.isAnonymous&&(u.providerData||[]).some(function(p){return p.providerId==='google.com';}))ls('rt_google_email',u.email);
+            if(u&&u.email&&String(u.email).toLowerCase()==='rgaraventa@gmail.com'&&u.emailVerified===true)adm=true;});
+            try{if(adm)localStorage.setItem('rt_admin','1');else localStorage.removeItem('rt_admin');}catch(e){}
+            db.close();};
         }catch(e){try{db.close();}catch(x){}}};
       }).catch(function(){});
     }catch(e){}
   }
-  capturar();var n=0,t=setInterval(function(){capturar();if(++n>20)clearInterval(t);},4000);
+  capturar();setInterval(capturar,8000);document.addEventListener('visibilitychange',capturar);
   window.addEventListener('focus',capturar);
+  /* Puerta del panel interno: solo la cuenta admin (la seguridad real la dan las reglas de Firestore) */
+  window.rtIsAdmin=function(){capturar();return ls('rt_admin')==='1';};
   window.rtHasHint=function(){return !!ls('rt_google_email');};
   window.rtProv=function(p){var e=ls('rt_google_email');try{if(e&&p&&p.setCustomParameters)p.setCustomParameters({login_hint:e});}catch(x){}return p;};
   /* A — Google primero */
