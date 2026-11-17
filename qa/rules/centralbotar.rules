@@ -1,0 +1,99 @@
+rules_version = '2';
+// CentralbotAr v1.0 — Reglas de Firestore — 2026-11-17 — PEGAR COMPLETO, UNA SOLA VEZ
+// Las funciones de servidor (Netlify) usan el Admin SDK y no pasan por estas reglas.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function logueado() { return request.auth != null; }
+    function esAdmin() { return logueado() && request.auth.token.admin == true; }
+    function miUsuario() { return get(/databases/$(database)/documents/usuarios/$(request.auth.uid)).data; }
+    function tengoUsuario() { return logueado() && exists(/databases/$(database)/documents/usuarios/$(request.auth.uid)); }
+    function esMiembro(neg) { return tengoUsuario() && miUsuario().negocioId == neg; }
+    function esOwner(neg) { return esMiembro(neg) && miUsuario().rolNegocio == 'owner'; }
+    function dentroDe15Dias(t) { return t is timestamp && t <= request.time + duration.value(15, 'd') && t >= request.time - duration.value(1, 'd'); }
+
+    // ---------- usuarios ----------
+    match /usuarios/{uid} {
+      allow get: if logueado() && (request.auth.uid == uid || esAdmin() || (tengoUsuario() && resource.data.negocioId == miUsuario().negocioId && miUsuario().rolNegocio == 'owner'));
+      allow list: if logueado() && (esAdmin() || (tengoUsuario() && miUsuario().rolNegocio == 'owner' && resource.data.negocioId == miUsuario().negocioId));
+      // alta como dueño de su propio negocio
+      allow create: if (logueado() && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['email', 'negocioId', 'rolNegocio', 'creadoEn'])
+        && request.resource.data.negocioId == uid && request.resource.data.rolNegocio == 'owner')
+        || (logueado() && request.auth.uid == uid
+        // alta como agente: exige una invitación sin usar de ese negocio
+        && request.resource.data.keys().hasOnly(['email', 'negocioId', 'rolNegocio', 'invCode', 'creadoEn'])
+        && request.resource.data.rolNegocio == 'agente'
+        && exists(/databases/$(database)/documents/negocios/$(request.resource.data.negocioId)/invitaciones/$(request.resource.data.invCode))
+        && get(/databases/$(database)/documents/negocios/$(request.resource.data.negocioId)/invitaciones/$(request.resource.data.invCode)).data.usada == false);
+      allow update: if false;
+      // el dueño puede quitar a sus agentes
+      allow delete: if logueado() && tengoUsuario() && miUsuario().rolNegocio == 'owner' && resource.data.negocioId == miUsuario().negocioId && resource.data.rolNegocio == 'agente';
+    }
+
+    // ---------- negocios ----------
+    match /negocios/{neg} {
+      allow get: if esMiembro(neg) || esAdmin();
+      allow list: if esAdmin();
+      allow create: if logueado() && request.auth.uid == neg
+        && request.resource.data.ownerUid == neg
+        && request.resource.data.features.limiteMensajesMes == 200 && request.resource.data.features.limiteEnviosMes == 30
+        && request.resource.data.mensajesEsteMes == 0 && request.resource.data.enviosEsteMes == 0
+        && !('banned' in request.resource.data)
+        && dentroDe15Dias(request.resource.data.demoHasta);
+      allow update: if esAdmin()
+        || esOwner(neg) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['nombreNegocio', 'systemPrompt', 'productos', 'faqs', 'horario'])
+        // cuenta vieja sin prueba: puede fijarse sus 14 días una sola vez
+        || esOwner(neg) && !('demoHasta' in resource.data) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['demoHasta']) && dentroDe15Dias(request.resource.data.demoHasta);
+      allow delete: if false;
+
+      match /contactos/{id} {
+        allow read: if esMiembro(neg);
+        allow write: if esOwner(neg);
+      }
+      match /plantillas/{id} {
+        allow read: if esMiembro(neg);
+        allow write: if esOwner(neg);
+      }
+      match /campanas/{id} {
+        allow read: if esMiembro(neg);
+        // el estado real y los contadores los maneja el servidor; el dueño solo crea borradores, borra y simula la práctica
+        allow create: if esOwner(neg) && request.resource.data.estado == 'borrador';
+        allow update: if esOwner(neg) && resource.data._demo == true;
+        allow delete: if esOwner(neg) && resource.data.estado != 'enviando';
+        match /destinatarios/{t} { allow read: if esMiembro(neg); allow write: if false; }
+      }
+      match /envios/{id} { allow read: if esOwner(neg); allow write: if false; }
+      match /conversaciones/{id} {
+        allow read: if esMiembro(neg);
+        allow write: if esOwner(neg);
+        // un agente solo puede cambiar el estado y tomar/devolver el control
+        allow update: if esMiembro(neg) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['estado', 'modoManual']);
+        match /mensajes/{m} {
+          allow read: if esMiembro(neg);
+          allow write: if esOwner(neg);
+        }
+      }
+      match /lineas/{id} { allow read: if esMiembro(neg); allow write: if false; }
+      match /secretos/{id} { allow read, write: if false; }
+      match /invitaciones/{code} {
+        allow get: if logueado();
+        allow list: if esOwner(neg);
+        allow create, delete: if esOwner(neg);
+        // quien se une marca la invitación como usada (una sola vez)
+        allow update: if logueado() && resource.data.usada == false
+          && request.resource.data.usada == true && request.resource.data.usadaPor == request.auth.uid
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['usada', 'usadaPor', 'usadaEn']);
+      }
+    }
+
+    match /lineasIndex/{id} { allow read, write: if false; }
+
+    // ---------- registro de errores (estándar punto 9) ----------
+    match /errores/{id} {
+      allow create: if logueado();
+      allow read: if esAdmin();
+      allow update, delete: if false;
+    }
+  }
+}

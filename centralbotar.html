@@ -1,24 +1,21 @@
 <!DOCTYPE html>
 <!--
   ════════════════════════════════════════════════════════════
-  CENTRALBOTAR — v0.2
-  Fecha de esta versión: 2026-10-26
-  v0.2: BACKUP (no tenía): automático diario + manual + restaurar en "Mi negocio" (sin el token de WhatsApp).
-  v0.1 (esqueleto inicial) — 2026-06-28
-  Primera versión funcional: login (email + Google), registro
-  automático como dueño de negocio, pantalla "Mi negocio"
-  (productos/FAQs/system prompt), pantalla "Conectar WhatsApp"
-  (credenciales + generación de verifyToken + URL del webhook),
-  y bandeja de chats en tiempo real con vista de conversación y
-  toggle de "Tomar control" (modo manual).
-  PENDIENTE (próximas versiones):
-  - Enviar mensajes manuales de verdad a WhatsApp (hoy solo se
-    guardan en Firestore; falta una función de Netlify aparte
-    para el envío saliente desde el dashboard).
-  - Pantalla "Mi equipo" (invitar agentes, patrón Rodix).
-  - Panel admin (5 toques en el logo, PIN) para ver todos los
-    negocios y controlar planes/límites.
-  - Completar firebaseConfig con los datos reales del proyecto.
+  CENTRALBOTAR — v1.0
+  Fecha de esta versión: 2026-11-17
+  v1.0: reescritura completa sobre el estándar RavenTechs de 12 puntos.
+   · Nuevo: Contactos (importar planilla, etiquetas, consentimiento, bajas), Plantillas, Campañas por lote con tope mensual,
+     Líneas de WhatsApp (varios números por cuenta: Seguridad Oeste y RavenTechs), Mi equipo (invitación de un solo uso),
+     envío manual que ahora SÍ llega a WhatsApp, horario de atención (el bot atiende fuera de horario y preguntas frecuentes;
+     deriva presupuestos y urgencias a una persona).
+   · Estándar: reglas Firestore endurecidas (qa/rules/centralbotar.rules), prueba gratis de 14 días con bloqueo y cartel,
+     menú admin oculto (5 toques a CentralbotAr, solo botones), Modo Práctica, backup diario/manual/restaurar, registro de errores,
+     instructivo (ayuda/index.html + PDF), PWA con service worker red-primero, sin claves secretas en el código.
+   · Seguridad: el token de WhatsApp ya no se guarda en el documento del negocio (vive en un lugar que solo lee el servidor);
+     los textos de los chats se escapan (antes podían ejecutar código); el webhook valida la firma de Meta.
+  v0.2 (2026-10-26): backup automático/manual/restaurar.   v0.1 (2026-06-28): esqueleto inicial.
+  PENDIENTE: aviso push al dueño cuando una conversación se deriva; imágenes y audios en la bandeja; creación de plantillas
+  directo en Meta desde el panel; backup nocturno desde servidor (ver estándar, punto 6).
   ════════════════════════════════════════════════════════════
 -->
 <html lang="es">
@@ -30,7 +27,8 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="CentralbotAR">
-<link rel="manifest" href="manifest.json">
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/icon-192.png">
 <link rel="apple-touch-icon" sizes="180x180" href="/icon-512-apple-180.png">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet"/>
@@ -39,75 +37,154 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
 <style>
 :root{
-  --navy:#0f1e3d;--navy3:#1e2f55;--blue:#1d4ed8;
+  --navy:#0f1e3d;--navy3:#1e2f55;--blue:#1d4ed8;--purple:#8E44AD;
   --gold:#f0b84a;--gold2:#c49020;
   --green:#16a34a;--green-bg:#dcfce7;
   --warn:#d97706;--warn-bg:#fef3c7;
   --red:#dc2626;--red-bg:#fee2e2;
-  --bg:#f4f6fb;--card:#fff;--line:#dde1ec;--text:#0f1e3d;--muted:#6b7a99;
+  --bg:#f4f6fb;--card:#fff;--line:#dde1ec;--text:#0f1e3d;--muted:#6b7a99;--soft:#eef1f8;
 }
-[data-theme="dark"]{
-  --bg:#0b1220;--card:#141d33;--line:#243150;--text:#e7ecf7;--muted:#8b97b8;
-}
+[data-theme="dark"]{--bg:#0b1220;--card:#141d33;--line:#243150;--text:#e7ecf7;--muted:#8b97b8;--soft:#1b2744;--green-bg:#12351f;--warn-bg:#3a2c0b;--red-bg:#3d1616}
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--text);font-family:'Inter',sans-serif;transition:background .3s}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--text);font-family:'Inter',system-ui,sans-serif;transition:background .3s}
 .hidden{display:none!important}
+button{font-family:inherit}
 #loading-screen{position:fixed;inset:0;background:linear-gradient(145deg,var(--navy) 0%,#1a3060 100%);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:9999;gap:14px;color:#fff}
 .spin{width:32px;height:32px;border:3px solid rgba(255,255,255,.25);border-top-color:#fff;border-radius:50%;animation:sp 1s linear infinite}
 @keyframes sp{to{transform:rotate(360deg)}}
+@keyframes blink{50%{opacity:.35}}
 .screen{display:none}
 .screen.active{display:block}
-#screen-login.active{display:flex;align-items:center;justify-content:center;min-height:100vh;background:linear-gradient(145deg,var(--navy) 0%,#1a3060 100%);padding:24px}
-.auth-box{max-width:380px;width:100%;padding:28px;border-radius:14px;background:var(--card);box-shadow:0 20px 50px rgba(0,0,0,.3)}
-.auth-box h1{margin:0;font-size:24px;font-weight:800;color:var(--navy)}
+
+/* login y bloqueo */
+#screen-login.active,#screen-bloqueo.active{display:flex;align-items:center;justify-content:center;min-height:100vh;background:linear-gradient(145deg,var(--navy) 0%,#1a3060 100%);padding:24px}
+.auth-box{max-width:400px;width:100%;padding:28px;border-radius:14px;background:var(--card);box-shadow:0 20px 50px rgba(0,0,0,.3)}
+.auth-box h1{margin:0;font-size:24px;font-weight:800;color:var(--text)}
 .auth-box .sub{font-size:12px;color:var(--muted);margin-bottom:20px;letter-spacing:.04em;text-transform:uppercase}
 .field{margin-bottom:12px}
 .field label{font-size:12px;font-weight:600;color:var(--muted);display:block;margin-bottom:5px}
-input,textarea{width:100%;padding:10px 12px;border:1.5px solid var(--line);border-radius:8px;font-size:14px;font-family:inherit;background:var(--card);color:var(--text)}
-input:focus,textarea:focus,button:focus-visible{outline:2px solid var(--gold);outline-offset:1px}
+input,textarea,select{width:100%;padding:10px 12px;border:1.5px solid var(--line);border-radius:8px;font-size:14px;font-family:inherit;background:var(--card);color:var(--text)}
+input[type=checkbox]{width:auto}
+input:focus,textarea:focus,select:focus,button:focus-visible{outline:2px solid var(--gold);outline-offset:1px}
 .btn-primary{width:100%;background:var(--navy);color:#fff;border:none;border-radius:8px;padding:12px;font-weight:700;font-size:14px;cursor:pointer;margin-top:6px}
 .btn-google{width:100%;background:#fff;color:#1f1f1f;border:1.5px solid var(--line);border-radius:8px;padding:11px;font-weight:600;font-size:14px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:10px;margin-top:8px}
 .btn-link{background:none;border:none;color:var(--blue);font-size:13px;cursor:pointer;width:100%;margin-top:10px}
 .err-msg{color:var(--red);font-size:12.5px;margin-top:10px;display:none}
 .err-msg.show{display:block}
+.aviso-inv{background:var(--warn-bg);color:var(--warn);border-radius:8px;padding:10px 12px;font-size:13px;margin-bottom:14px;font-weight:600}
 
-#screen-app{display:none}
+/* estructura */
 #screen-app.active{display:flex;min-height:100vh}
-.sidebar{width:230px;background:var(--navy);color:#fff;display:flex;flex-direction:column;padding:18px 14px;flex-shrink:0}
-.brand{font-size:19px;font-weight:800;display:flex;align-items:center;gap:8px;padding:6px 8px 22px}
-.nav-item{padding:11px 12px;border-radius:8px;cursor:pointer;font-size:14px;font-weight:600;color:rgba(255,255,255,.75);margin-bottom:4px;display:flex;align-items:center;gap:10px}
-.nav-item:hover{background:rgba(255,255,255,.06)}
-.nav-item.active{background:rgba(255,255,255,.12);color:#fff}
+.sidebar{width:236px;background:var(--navy);color:#fff;display:flex;flex-direction:column;padding:18px 14px;flex-shrink:0;position:sticky;top:0;height:100vh;overflow-y:auto}
+.brand{font-size:19px;font-weight:800;display:flex;align-items:center;gap:8px;padding:6px 8px 18px;cursor:default;user-select:none;-webkit-user-select:none}
+.nav-item{padding:11px 12px;border-radius:8px;cursor:pointer;font-size:14px;font-weight:600;color:rgba(255,255,255,.78);margin-bottom:3px;display:flex;align-items:center;gap:10px}
+.nav-item:hover{background:rgba(255,255,255,.07)}
+.nav-item.active{background:rgba(255,255,255,.14);color:#fff}
+.nav-item .badge{margin-left:auto;background:var(--red);color:#fff;border-radius:99px;font-size:11px;padding:1px 7px;font-weight:700}
 .sidebar-bottom{margin-top:auto;padding-top:14px;border-top:1px solid rgba(255,255,255,.12)}
 .btn-logout{width:100%;background:transparent;border:1px solid rgba(255,255,255,.25);color:#fff;border-radius:8px;padding:9px;font-size:13px;cursor:pointer}
-.main{flex:1;padding:28px;max-width:1100px}
-.page-title{font-size:22px;font-weight:800;margin-bottom:18px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px;margin-bottom:18px}
-.btn-sm{background:var(--navy);color:#fff;border:none;border-radius:7px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer}
-.btn-sm.gold{background:var(--gold);color:var(--navy)}
-.btn-sm.outline{background:transparent;border:1.5px solid var(--navy);color:var(--navy)}
-.list-item{display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border:1px solid var(--line);border-radius:8px;margin-bottom:8px}
-.tag{font-size:11px;background:var(--green-bg);color:var(--green);padding:3px 8px;border-radius:99px;font-weight:700}
+.col{flex:1;min-width:0;display:flex;flex-direction:column}
+.topbar{display:none;align-items:center;gap:10px;background:var(--navy);color:#fff;padding:10px 14px;position:sticky;top:0;z-index:30}
+.topbar .brand{padding:0;flex:1;font-size:17px}
+.topbar button{background:none;border:none;color:#fff;font-size:22px;cursor:pointer;padding:2px 6px}
+.main{flex:1;padding:24px;max-width:1100px;width:100%}
+.page-title{font-size:22px;font-weight:800;margin-bottom:6px}
+.page-sub{font-size:13px;color:var(--muted);margin-bottom:16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px}
+.card h3{margin:0 0 10px;font-size:15px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.row>.grow{flex:1;min-width:160px}
+.btn-sm{background:var(--navy);color:#fff;border:none;border-radius:7px;padding:9px 14px;font-size:13px;font-weight:600;cursor:pointer}
+.btn-sm.gold{background:var(--gold);color:#10203d}
+.btn-sm.outline{background:transparent;border:1.5px solid var(--navy);color:var(--text)}
+[data-theme="dark"] .btn-sm.outline{border-color:var(--muted)}
+.btn-sm.red{background:var(--red);color:#fff}
+.btn-sm.green{background:var(--green);color:#fff}
+.btn-sm[disabled]{opacity:.5;cursor:not-allowed}
+.list-item{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;margin-bottom:8px}
+.tag{display:inline-block;font-size:11px;background:var(--green-bg);color:var(--green);padding:3px 8px;border-radius:99px;font-weight:700;margin:1px 2px 1px 0}
 .tag.warn{background:var(--warn-bg);color:var(--warn)}
+.tag.red{background:var(--red-bg);color:var(--red)}
+.tag.gris{background:var(--soft);color:var(--muted)}
+.muted{color:var(--muted);font-size:12.5px}
+.vacio{padding:26px;text-align:center;color:var(--muted);font-size:13.5px}
+.barra{height:9px;background:var(--soft);border-radius:99px;overflow:hidden;margin:6px 0 2px}
+.barra>i{display:block;height:100%;background:var(--green);border-radius:99px;transition:width .4s}
+.barra>i.warn{background:var(--warn)}.barra>i.red{background:var(--red)}
+details{margin-top:10px;font-size:13px}
+details summary{cursor:pointer;font-weight:700}
+details ol{padding-left:20px;line-height:1.55}
+code.copia{background:var(--soft);padding:2px 6px;border-radius:5px;font-size:12px;word-break:break-all}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+.stat{background:var(--soft);border-radius:10px;padding:12px 14px}
+.stat b{display:block;font-size:22px}
+.stat span{font-size:12px;color:var(--muted)}
 
-/* Bandeja de chats */
-.inbox-wrap{display:flex;gap:0;border:1px solid var(--line);border-radius:12px;overflow:hidden;height:600px;background:var(--card)}
-.conv-list{width:320px;border-right:1px solid var(--line);overflow-y:auto;flex-shrink:0}
-.conv-row{padding:13px 14px;border-bottom:1px solid var(--line);cursor:pointer;display:flex;flex-direction:column;gap:3px}
+/* cartel de prueba */
+#demo-banner{display:none;padding:9px 16px;font-size:13px;font-weight:700;background:var(--warn-bg);color:var(--warn);align-items:center;gap:12px;flex-wrap:wrap}
+#demo-banner.on{display:flex}
+#demo-banner.rojo{background:var(--red-bg);color:var(--red);animation:blink 1.1s infinite}
+#demo-banner a{margin-left:auto;background:var(--gold);color:#10203d;text-decoration:none;border-radius:7px;padding:6px 12px}
+
+/* bandeja */
+.filtros{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
+.filtros button{border:1.5px solid var(--line);background:var(--card);color:var(--text);border-radius:99px;padding:6px 13px;font-size:12.5px;font-weight:600;cursor:pointer}
+.filtros button.on{background:var(--navy);color:#fff;border-color:var(--navy)}
+.inbox-wrap{display:flex;border:1px solid var(--line);border-radius:12px;overflow:hidden;height:calc(100vh - 230px);min-height:420px;background:var(--card)}
+.conv-list{width:330px;border-right:1px solid var(--line);overflow-y:auto;flex-shrink:0}
+.conv-row{padding:12px 14px;border-bottom:1px solid var(--line);cursor:pointer;display:flex;flex-direction:column;gap:3px}
 .conv-row:hover{background:var(--bg)}
 .conv-row.active{background:var(--bg);border-left:3px solid var(--gold)}
-.conv-row .name{font-weight:700;font-size:13.5px}
+.conv-row .name{font-weight:700;font-size:13.5px;display:flex;justify-content:space-between;gap:6px}
 .conv-row .preview{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.chat-area{flex:1;display:flex;flex-direction:column}
-.chat-header{padding:14px 16px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center}
-.chat-msgs{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:8px}
-.bubble{max-width:70%;padding:9px 13px;border-radius:12px;font-size:13.5px;line-height:1.4}
-.bubble.cliente{background:var(--bg);align-self:flex-start}
-.bubble.bot{background:#e0e7ff;align-self:flex-end}
-.bubble.humano{background:var(--gold);color:var(--navy);align-self:flex-end}
-.chat-input{padding:12px;border-top:1px solid var(--line);display:flex;gap:8px}
+.chat-area{flex:1;display:flex;flex-direction:column;min-width:0}
+.chat-header{padding:12px 14px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
+.chat-msgs{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:8px}
+.bubble{max-width:78%;padding:9px 13px;border-radius:12px;font-size:13.5px;line-height:1.4;white-space:pre-wrap;word-break:break-word}
+.bubble small{display:block;font-size:10.5px;opacity:.6;margin-top:3px}
+.bubble.cliente{background:var(--soft);align-self:flex-start}
+.bubble.bot{background:#e0e7ff;color:#10203d;align-self:flex-end}
+.bubble.humano{background:var(--gold);color:#10203d;align-self:flex-end}
+.chat-input{padding:10px;border-top:1px solid var(--line);display:flex;gap:8px}
 .chat-input input{flex:1}
-.empty-inbox{display:flex;align-items:center;justify-content:center;height:100%;color:var(--muted);font-size:13px}
+.aviso-24{padding:10px 14px;background:var(--warn-bg);color:var(--warn);font-size:12.5px;font-weight:600}
+.empty-inbox{display:flex;align-items:center;justify-content:center;height:100%;padding:20px;text-align:center;color:var(--muted);font-size:13px}
+.btn-volver{display:none}
+
+/* tablas / contactos */
+.fila{display:flex;align-items:center;gap:10px;padding:10px 4px;border-bottom:1px solid var(--line)}
+.fila .info{flex:1;min-width:0}
+.fila .info b{display:block;font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fila .acc{display:flex;gap:6px}
+.ico{background:var(--soft);border:none;border-radius:7px;padding:6px 9px;cursor:pointer;font-size:14px;color:var(--text)}
+
+/* modal y aviso */
+#modal{position:fixed;inset:0;background:rgba(5,10,25,.6);z-index:5000;display:none;align-items:flex-start;justify-content:center;padding:20px;overflow-y:auto}
+#modal.on{display:flex}
+#modal .caja{background:var(--card);border-radius:14px;max-width:560px;width:100%;padding:20px;margin:auto}
+#modal h3{margin:0 0 12px;font-size:17px}
+#toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--navy);color:#fff;padding:10px 18px;border-radius:10px;font-size:13.5px;z-index:6000;display:none;max-width:90vw;box-shadow:0 6px 20px rgba(0,0,0,.3)}
+#toast.on{display:block}
+#toast.err{background:var(--red)}
+table.t{width:100%;border-collapse:collapse;font-size:12.5px}
+table.t th,table.t td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:left}
+
+@media (max-width:860px){
+  #screen-app.active{display:block}
+  .topbar{display:flex}
+  .sidebar{position:fixed;left:0;top:0;bottom:0;z-index:40;transform:translateX(-100%);transition:transform .25s;width:260px;box-shadow:6px 0 24px rgba(0,0,0,.35)}
+  .sidebar.open{transform:none}
+  .sidebar .brand{cursor:default}
+  .main{padding:16px 12px 40px}
+  .inbox-wrap{height:calc(100vh - 250px)}
+  .conv-list{width:100%;border-right:none}
+  .chat-area{display:none}
+  .inbox-wrap.chat-open .conv-list{display:none}
+  .inbox-wrap.chat-open .chat-area{display:flex}
+  .btn-volver{display:inline-block}
+  .bubble{max-width:90%}
+}
 </style>
 <script>
 // RavenTechs PWA Banner v1.1 — en el HEAD para capturar beforeinstallprompt temprano
@@ -257,9 +334,10 @@ var __rtPWA = (function() {
 <div id="screen-login" class="screen">
   <div class="auth-box">
     <h1>CentralbotAr</h1>
-    <div class="sub">Panel de mensajes centralizado</div>
-    <div class="field"><label>Email</label><input id="f-email" type="email" placeholder="tu@negocio.com"/></div>
-    <div class="field"><label>Contraseña</label><input id="f-pass" type="password" placeholder="••••••••"/></div>
+    <div class="sub">Tus chats de WhatsApp en un solo lugar</div>
+    <div id="aviso-invitacion" class="aviso-inv hidden">👋 Te invitaron a sumarte a un equipo. Ingresá con tu cuenta para aceptar la invitación.</div>
+    <div class="field"><label>Email</label><input id="f-email" type="email" placeholder="tu@negocio.com" autocomplete="email"/></div>
+    <div class="field"><label>Contraseña</label><input id="f-pass" type="password" placeholder="••••••••" autocomplete="current-password"/></div>
     <button class="btn-primary" id="btn-auth">Ingresar →</button>
     <button class="btn-link" id="btn-toggle-register">¿No tenés cuenta? Creá una</button>
     <div style="display:flex;align-items:center;gap:10px;margin:14px 0;color:var(--muted);font-size:12px">
@@ -273,91 +351,203 @@ var __rtPWA = (function() {
   </div>
 </div>
 
+<!-- ───────── PRUEBA VENCIDA ───────── -->
+<div id="screen-bloqueo" class="screen">
+  <div class="auth-box" style="text-align:center">
+    <div style="font-size:42px">⏳</div>
+    <h1 id="bloqueo-titulo">Tu prueba gratis terminó</h1>
+    <p class="muted" id="bloqueo-texto" style="margin:12px 0 18px">Tus datos están guardados y no se pierde nada. Para seguir usando CentralbotAr, activá tu cuenta.</p>
+    <a class="btn-primary" id="bloqueo-wa" style="display:block;text-decoration:none" target="_blank" rel="noopener">💬 Activar mi cuenta</a>
+    <button class="btn-link" id="bloqueo-salir">Cerrar sesión</button>
+  </div>
+</div>
+
 <!-- ───────── APP ───────── -->
 <div id="screen-app" class="screen">
-  <nav class="sidebar">
-    <div class="brand">💬 CentralbotAr</div>
-    <div class="nav-item active" data-page="bandeja">📥 Bandeja de chats</div>
-    <div class="nav-item" data-page="negocio">🏪 Mi negocio</div>
-    <div class="nav-item" data-page="whatsapp">📲 Conectar WhatsApp</div>
+  <nav class="sidebar" id="sidebar">
+    <div class="brand" id="brand-side">💬 CentralbotAr</div>
+    <div id="nav"></div>
     <div class="sidebar-bottom">
       <div style="font-size:12px;color:rgba(255,255,255,.6);margin-bottom:10px;word-break:break-all" id="user-email"></div>
       <button class="btn-logout" id="btn-logout">Cerrar sesión</button>
     </div>
   </nav>
 
-  <main class="main">
-    <!-- Bandeja de chats -->
-    <div id="page-bandeja" class="page">
-      <div class="page-title">Bandeja de chats</div>
-      <div class="inbox-wrap">
-        <div class="conv-list" id="conv-list"><div class="empty-inbox">Cargando conversaciones...</div></div>
-        <div class="chat-area" id="chat-area"><div class="empty-inbox">Elegí una conversación de la izquierda</div></div>
-      </div>
+  <div class="col">
+    <div class="topbar">
+      <button id="btn-menu" aria-label="Menú">☰</button>
+      <div class="brand" id="brand-top">💬 CentralbotAr</div>
     </div>
+    <div id="demo-banner"></div>
+    <main class="main">
 
-    <!-- Mi negocio -->
-    <div id="page-negocio" class="page hidden">
-      <div class="page-title">Mi negocio</div>
-      <div class="card">
-        <div class="field"><label>Nombre del negocio</label><input id="neg-nombre" placeholder="Ej: Distribuidora Pérez"/></div>
-        <div class="field"><label>Mensaje de bienvenida / personalidad del bot</label><textarea id="neg-prompt" rows="4" placeholder="Sos el asistente de atención al cliente de... Respondé en español rioplatense, breve y amable..."></textarea></div>
-        <button class="btn-sm gold" id="btn-guardar-negocio">💾 Guardar datos del negocio</button>
-      </div>
-
-      <div class="card">
-        <h3 style="margin-top:0">Productos</h3>
-        <div id="lista-productos"></div>
-        <div style="display:flex;gap:8px;margin-top:10px">
-          <input id="prod-nombre" placeholder="Nombre" style="flex:1"/>
-          <input id="prod-precio" placeholder="Precio" style="width:100px"/>
-          <button class="btn-sm" id="btn-add-producto">＋ Agregar</button>
+      <!-- Bandeja -->
+      <div id="page-bandeja" class="page">
+        <div class="page-title">Bandeja de chats</div>
+        <div class="filtros" id="filtros-bandeja"></div>
+        <div class="inbox-wrap" id="inbox-wrap">
+          <div class="conv-list" id="conv-list"><div class="empty-inbox">Cargando conversaciones...</div></div>
+          <div class="chat-area" id="chat-area"><div class="empty-inbox">Elegí una conversación de la lista</div></div>
         </div>
       </div>
 
-      <div class="card">
-        <h3 style="margin-top:0">Preguntas frecuentes (FAQs)</h3>
-        <div id="lista-faqs"></div>
-        <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
-          <input id="faq-pregunta" placeholder="Pregunta" style="flex:1;min-width:200px"/>
-          <input id="faq-respuesta" placeholder="Respuesta" style="flex:1;min-width:200px"/>
-          <button class="btn-sm" id="btn-add-faq">＋ Agregar</button>
+      <!-- Contactos -->
+      <div id="page-contactos" class="page hidden">
+        <div class="page-title">Contactos</div>
+        <div class="page-sub">Tu lista de clientes e interesados. Solo se les escribe en campañas si aceptaron recibir mensajes.</div>
+        <div class="grid2" id="contactos-stats" style="margin-bottom:14px"></div>
+        <div class="card">
+          <div class="row" style="margin-bottom:10px">
+            <input class="grow" id="ct-buscar" placeholder="Buscar por nombre o teléfono"/>
+            <select id="ct-filtro" style="width:auto;min-width:150px"></select>
+          </div>
+          <div class="row" id="ct-botones" style="margin-bottom:8px">
+            <button class="btn-sm gold" data-act="ct-nuevo">＋ Agregar</button>
+            <button class="btn-sm" data-act="ct-importar">📥 Importar planilla</button>
+            <button class="btn-sm outline" data-act="ct-exportar">📤 Exportar</button>
+          </div>
+          <div id="ct-lista"></div>
         </div>
       </div>
-      <div class="card">
-        <h3 style="margin-top:0">💾 Backup de datos</h3>
-        <p style="font-size:13px;color:var(--muted,#64748b);margin-bottom:12px">Una copia del negocio (nombre, personalidad del bot, productos, FAQs) y de todas las conversaciones. Se baja sola una vez por día al entrar; también podés bajarla cuando quieras o restaurar una anterior. La conexión de WhatsApp (token) no va al archivo.</p>
-        <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <button class="btn-sm gold" onclick="generarBackup(false)">📥 Descargar backup ahora</button>
-          <button class="btn-sm outline" onclick="document.getElementById('inputRestaurarBackup').click()">📤 Restaurar desde un archivo</button>
-          <input type="file" id="inputRestaurarBackup" accept=".json,application/json" style="display:none" onchange="restaurarBackup(this)">
-        </div>
-        <p style="font-size:12px;margin-top:10px">Último backup: <span id="ultimoBackupFecha">—</span> · <span id="bkMsg"></span></p>
-      </div>
-    </div>
 
-    <!-- Conectar WhatsApp -->
-    <div id="page-whatsapp" class="page hidden">
-      <div class="page-title">Conectar WhatsApp</div>
-      <div class="card">
-        <p style="font-size:13px;color:var(--muted);margin-top:0">
-          Necesitás tu propia app en Meta for Developers con el producto WhatsApp agregado.
-          Pegá aquí el <strong>Phone Number ID</strong> y el <strong>token de acceso</strong> que te dio Meta.
-        </p>
-        <div class="field"><label>Phone Number ID</label><input id="wa-phoneid" placeholder="Ej: 123456789012345"/></div>
-        <div class="field"><label>Token de acceso (permanente)</label><input id="wa-token" type="password" placeholder="EAAxxxxxxxxxxxxx"/></div>
-        <button class="btn-sm gold" id="btn-guardar-whatsapp">💾 Guardar y generar datos del webhook</button>
-        <div id="wa-resultado" style="margin-top:16px;display:none">
-          <div class="field"><label>URL del webhook (pegala en Meta)</label><input id="wa-url" readonly/></div>
-          <div class="field"><label>Token de verificación (pegalo en Meta)</label><input id="wa-verify" readonly/></div>
+      <!-- Campañas -->
+      <div id="page-campanas" class="page hidden">
+        <div class="page-title">Campañas</div>
+        <div class="page-sub">Enviá una oferta o aviso a un grupo de contactos usando una plantilla aprobada por Meta. Cada mensaje enviado cuenta para tu tope mensual.</div>
+        <div class="card"><div class="row"><button class="btn-sm gold" data-act="cp-nueva">＋ Nueva campaña</button><span class="muted" id="cp-cupo"></span></div></div>
+        <div id="cp-lista"></div>
+      </div>
+
+      <!-- Plantillas -->
+      <div id="page-plantillas" class="page hidden">
+        <div class="page-title">Plantillas</div>
+        <div class="page-sub">Meta exige plantillas aprobadas para escribirle a un cliente que no te escribió en las últimas 24 horas. Se crean en Meta y acá las registrás para usarlas en campañas.</div>
+        <div class="card"><button class="btn-sm gold" data-act="pl-nueva">＋ Nueva plantilla</button>
+          <details><summary>¿Cómo se crea una plantilla en Meta?</summary>
+            <ol>
+              <li>Entrá a <b>business.facebook.com</b> → Administrador de WhatsApp → <b>Plantillas de mensajes</b> → <b>Crear plantilla</b>.</li>
+              <li>Categoría: <b>Marketing</b> (ofertas) o <b>Utilidad</b> (avisos de un servicio).</li>
+              <li>Nombre y idioma: tienen que ser <b>idénticos</b> a los que cargues acá.</li>
+              <li>Pegá el texto (botón «Copiar texto para Meta» al guardar la plantilla acá) y enviala a revisión. Suele aprobarse en minutos.</li>
+              <li>Cuando Meta la apruebe, volvé y cambiá el estado a <b>Aprobada</b>.</li>
+            </ol>
+          </details>
+        </div>
+        <div id="pl-lista"></div>
+      </div>
+
+      <!-- Mi negocio -->
+      <div id="page-negocio" class="page hidden">
+        <div class="page-title">Mi negocio</div>
+        <div class="card">
+          <div class="field"><label>Nombre del negocio</label><input id="neg-nombre" maxlength="80" placeholder="Ej: Seguridad Electrónica Oeste"/></div>
+          <div class="field"><label>Personalidad del bot</label><textarea id="neg-prompt" rows="4" maxlength="2000" placeholder="Sos el asistente de... Respondé en español rioplatense, breve y amable..."></textarea></div>
+          <button class="btn-sm gold" data-act="neg-guardar">💾 Guardar</button>
+        </div>
+        <div class="card">
+          <h3>🕘 Horario de atención</h3>
+          <p class="muted" style="margin-top:0">En horario, el bot solo contesta preguntas frecuentes y te deja el resto a vos. Fuera de horario contesta todo y te deriva presupuestos y urgencias.</p>
+          <label style="font-size:13px;font-weight:600"><input type="checkbox" id="hor-activo"/> Usar horario de atención</label>
+          <div class="row" id="hor-dias" style="margin:10px 0"></div>
+          <div class="row"><div><label class="muted">Desde</label><input type="time" id="hor-desde" value="09:00"/></div><div><label class="muted">Hasta</label><input type="time" id="hor-hasta" value="18:00"/></div></div>
+          <p class="muted">Hora de Argentina. Sin horario activado, el bot atiende siempre como si estuvieras fuera de horario.</p>
+          <button class="btn-sm gold" data-act="hor-guardar">💾 Guardar horario</button>
+        </div>
+        <div class="card">
+          <h3>Productos</h3>
+          <div id="lista-productos"></div>
+          <div class="row" style="margin-top:10px"><input class="grow" id="prod-nombre" maxlength="80" placeholder="Nombre"/><input id="prod-precio" maxlength="30" placeholder="Precio" style="width:110px"/><button class="btn-sm" data-act="prod-add">＋ Agregar</button></div>
+        </div>
+        <div class="card">
+          <h3>Preguntas frecuentes</h3>
+          <div id="lista-faqs"></div>
+          <div class="row" style="margin-top:10px"><input class="grow" id="faq-pregunta" maxlength="160" placeholder="Pregunta"/><input class="grow" id="faq-respuesta" maxlength="400" placeholder="Respuesta"/><button class="btn-sm" data-act="faq-add">＋ Agregar</button></div>
         </div>
       </div>
-    </div>
-  </main>
+
+      <!-- Líneas -->
+      <div id="page-lineas" class="page hidden">
+        <div class="page-title">Números de WhatsApp</div>
+        <div class="page-sub">Cada número conectado es una «línea». Podés tener varios en la misma cuenta (por ejemplo Seguridad Oeste y RavenTechs).</div>
+        <div id="aviso-legacy" class="card hidden" style="border-color:var(--red);background:var(--red-bg)"><b>⚠️ Conexión vieja con el token a la vista.</b><br><span class="muted">Hay un token guardado de la versión anterior en los datos del negocio. Volvé a conectar ese mismo número acá abajo: se mueve a un lugar seguro y el viejo se borra.</span></div>
+        <div id="ln-lista"></div>
+        <div class="card">
+          <h3>Conectar un número</h3>
+          <div class="field"><label>Nombre para reconocerlo</label><input id="ln-nombre" maxlength="60" placeholder="Ej: Seguridad Oeste"/></div>
+          <div class="field"><label>Phone Number ID (de Meta)</label><input id="ln-phone" inputmode="numeric" placeholder="Ej: 123456789012345"/></div>
+          <div class="field"><label>Token de acceso permanente</label><input id="ln-token" type="password" placeholder="EAAxxxxxxxxxxxxx" autocomplete="off"/></div>
+          <button class="btn-sm gold" data-act="ln-conectar">🔗 Probar y conectar</button>
+          <p class="muted" id="ln-msg"></p>
+          <details><summary>¿Dónde saco el Phone Number ID y el token?</summary>
+            <ol>
+              <li>En <b>developers.facebook.com</b> → tu app → <b>WhatsApp → Configuración de la API</b>: ahí está el <b>Phone Number ID</b> del número.</li>
+              <li>El token de prueba dura 24 h. Para uno <b>permanente</b>: business.facebook.com → Configuración → <b>Usuarios del sistema</b> → creá uno (Admin) → <b>Generar token</b> con los permisos <i>whatsapp_business_messaging</i> y <i>whatsapp_business_management</i>.</li>
+              <li>Al conectar, el panel te muestra la <b>URL del webhook</b> y el <b>token de verificación</b>: pegalos en tu app de Meta → WhatsApp → <b>Configuración → Webhook</b> y suscribite al campo <b>messages</b>.</li>
+            </ol>
+          </details>
+        </div>
+      </div>
+
+      <!-- Equipo -->
+      <div id="page-equipo" class="page hidden">
+        <div class="page-title">Mi equipo</div>
+        <div class="page-sub">Los agentes pueden ver y contestar chats. No ven campañas, números ni configuración.</div>
+        <div class="card">
+          <div class="row"><input class="grow" id="eq-nombre" maxlength="40" placeholder="Nombre de la persona (opcional)"/><button class="btn-sm gold" data-act="eq-invitar">＋ Crear invitación</button></div>
+          <p class="muted">La invitación es un link de un solo uso. Quien lo abra ingresa con su cuenta y queda como agente.</p>
+          <div id="eq-invs"></div>
+        </div>
+        <div class="card"><h3>Agentes</h3><div id="eq-agentes"></div></div>
+      </div>
+
+      <!-- Configuración -->
+      <div id="page-config" class="page hidden">
+        <div class="page-title">Configuración</div>
+        <div class="card"><h3>📊 Uso de este mes</h3><div id="cfg-uso"></div></div>
+        <div class="card" id="cfg-backup">
+          <h3>💾 Backup de datos</h3>
+          <p class="muted" style="margin-top:0">Copia del negocio, contactos, plantillas, campañas y todas las conversaciones. Se baja sola una vez por día al entrar; también podés bajarla cuando quieras o restaurar una anterior. Los tokens de WhatsApp nunca van al archivo. Los datos de práctica tampoco.</p>
+          <div class="row">
+            <button class="btn-sm gold" data-act="bk-ahora">📥 Descargar backup ahora</button>
+            <button class="btn-sm outline" data-act="bk-restaurar">📤 Restaurar desde un archivo</button>
+            <input type="file" id="bk-file" accept=".json,application/json" style="display:none"/>
+          </div>
+          <p class="muted" style="margin-top:10px">Último backup: <span id="ultimoBackupFecha">—</span> · <span id="bkMsg"></span></p>
+        </div>
+        <div class="card" id="cfg-practica">
+          <h3>🎓 Modo práctica</h3>
+          <p class="muted" style="margin-top:0">Carga contactos, una plantilla y chats de ejemplo para que pruebes todo sin escribirle a nadie. Los envíos de práctica son simulados y no salen a WhatsApp. «Quitar» borra solo lo marcado como práctica.</p>
+          <div class="row"><button class="btn-sm gold" data-act="pr-cargar">Cargar datos de práctica</button><button class="btn-sm outline" data-act="pr-quitar">Quitar datos de práctica</button></div>
+          <p class="muted" id="pr-msg"></p>
+        </div>
+        <div class="card">
+          <h3>📖 Ayuda y apariencia</h3>
+          <div class="row"><a class="btn-sm" href="/ayuda/index.html" target="_blank" rel="noopener" style="text-decoration:none">📖 Instructivo</a><a class="btn-sm outline" href="/Guia-CentralbotAr.pdf" target="_blank" rel="noopener" style="text-decoration:none">📄 Descargar PDF</a><button class="btn-sm outline" data-act="tema">🌓 Modo claro / oscuro</button></div>
+          <p class="muted" style="margin-top:10px">CentralbotAr v1.0 · RavenTechs</p>
+        </div>
+      </div>
+
+      <!-- Admin (oculto: 5 toques a «CentralbotAr») -->
+      <div id="page-admin" class="page hidden">
+        <div class="page-title">🛠 Administración</div>
+        <div class="page-sub">Solo vos ves esto. Botones simples: dar días de prueba, pasar a cliente, sumar envíos.</div>
+        <div id="adm-lista"></div>
+      </div>
+
+    </main>
+  </div>
 </div>
 
+<div id="modal"><div class="caja" id="modal-caja"></div></div>
+<div id="toast"></div>
+
 <script>
-// ============== CONFIGURACIÓN FIREBASE — COMPLETAR ANTES DE SUBIR ==============
+// ============================================================ CONFIG ============================================================
+const APP = 'CentralbotAr', VERSION = '1.0';
+const WA_ACTIVAR = '';   // WhatsApp del dueño para el botón «Activar mi cuenta» (con código de país, ej. 5491155551234). Vacío = el botón no se muestra.
+const FN = 'https://magnificent-jalebi-8408d5.netlify.app/.netlify/functions';
+const DIAS_PRUEBA = 14;
+const DEF = { limiteMensajesMes: 200, limiteEnviosMes: 30 };
 const firebaseConfig = {
   apiKey: "AIzaSyAuqaY4zgJPCXNRnlP-cXxi7tQyRWVfQ9w",
   authDomain: "centralbotar.firebaseapp.com",
@@ -369,374 +559,767 @@ const firebaseConfig = {
 firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db = firebase.firestore();
+const FV = firebase.firestore.FieldValue, TS = firebase.firestore.Timestamp;
 
-let currentUser = null, userDoc = null, negocioId = null, isRegister = false;
-let unsubConvs = null, unsubMsgs = null, conversaciones = [], convActivaId = null;
+// ============================================================ ESTADO ============================================================
+const S = { user: null, userDoc: null, negocioId: null, neg: null, esOwner: false, esAdmin: false,
+  contactos: [], plantillas: [], campanas: [], lineas: [], convs: [], convId: null, filtroBandeja: 'todos', unsub: {}, pagina: 'bandeja', avisoCupo: false };
+let isRegister = false;
 
-// ───────── AUTH ─────────
-document.getElementById('btn-toggle-register').addEventListener('click', () => {
+// ============================================================ HELPERS ============================================================
+const $ = id => document.getElementById(id);
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const nref = () => db.collection('negocios').doc(S.negocioId);
+function toast(m, err) { const t = $('toast'); t.textContent = m; t.className = 'on' + (err ? ' err' : ''); clearTimeout(toast._t); toast._t = setTimeout(() => { t.className = ''; }, err ? 5000 : 2800); }
+function abrirModal(html) { $('modal-caja').innerHTML = html; $('modal').classList.add('on'); }
+function cerrarModal() { $('modal').classList.remove('on'); $('modal-caja').innerHTML = ''; }
+function fmt(ts) { try { const d = ts && ts.toDate ? ts.toDate() : new Date(ts); return d.toLocaleString('es-AR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }); } catch (e) { return ''; } }
+function ms(ts) { return ts && ts.toMillis ? ts.toMillis() : 0; }
+function mesActual() { const p = {}; new Intl.DateTimeFormat('en-GB', { timeZone: 'America/Argentina/Buenos_Aires', year: 'numeric', month: '2-digit' }).formatToParts(new Date()).forEach(x => { p[x.type] = x.value; }); return p.year + '-' + p.month; }
+function copiar(txt) {
+  const ok = () => toast('📋 Copiado');
+  if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(txt).then(ok, () => copiarViejo(txt, ok)); } else copiarViejo(txt, ok);
+}
+function copiarViejo(txt, ok) { const t = document.createElement('textarea'); t.value = txt; t.style.position = 'fixed'; t.style.opacity = '0'; document.body.appendChild(t); t.select(); try { document.execCommand('copy'); ok(); } catch (e) { toast('No se pudo copiar', true); } t.remove(); }
+function limite(campo) { const f = (S.neg && S.neg.features) || {}; return f[campo] != null ? f[campo] : DEF[campo]; }
+function usado(campo) { return (S.neg && S.neg.mesClave === mesActual()) ? ((S.neg[campo]) || 0) : 0; }
+function slug(s) { return String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 60); }
+
+// ============================================================ REGISTRO DE ERRORES (estándar punto 9) ============================================================
+let _errN = 0;
+function logError(msg, extra) {
+  try {
+    if (_errN++ >= 5) return;
+    db.collection('errores').add({ app: APP, version: VERSION, mensaje: String(msg).slice(0, 500), extra: String(extra || '').slice(0, 500), url: location.pathname, uid: S.user ? S.user.uid : null, ua: navigator.userAgent.slice(0, 160), ts: FV.serverTimestamp() }).catch(() => {});
+  } catch (e) {}
+}
+window.addEventListener('error', e => logError(e.message, (e.filename || '') + ':' + (e.lineno || '')));
+window.addEventListener('unhandledrejection', e => logError('promesa: ' + (e.reason && (e.reason.message || e.reason)), ''));
+
+// ============================================================ LLAMADAS AL SERVIDOR ============================================================
+const ERRORES = {
+  sin_sesion: 'Tu sesión venció. Volvé a ingresar.', sesion_invalida: 'Tu sesión venció. Volvé a ingresar.', negocio_ajeno: 'Ese negocio no es tuyo.',
+  solo_dueño: 'Solo el dueño puede hacer esto.', tope_mensual: 'Llegaste al tope mensual de envíos de tu plan.', prueba_vencida: 'Tu prueba gratis terminó.',
+  plantilla_no_aprobada: 'La plantilla todavía no está aprobada por Meta.', plantilla_no_existe: 'La plantilla no existe.', sin_destinatarios: 'No hay contactos con OK para esa etiqueta.',
+  linea_sin_conectar: 'Ese número de WhatsApp no está conectado.', ventana_24h: 'Pasaron más de 24 h desde el último mensaje del cliente: solo se le puede escribir con una plantilla (campaña).',
+  token_invalido: 'Meta rechazó el token. Revisá el Phone Number ID y el token.', numero_en_uso: 'Ese número ya está conectado en otra cuenta.', cuenta_bloqueada: 'Cuenta bloqueada.',
+  ya_iniciada: 'La campaña ya se inició.', campana_de_practica: 'Es una campaña de práctica.', conversacion_de_practica: 'Es un chat de práctica.', meta: 'Meta no pudo enviar el mensaje.',
+  meta_no_responde: 'Meta no responde ahora. Probá en un rato.', interno: 'Error del servidor. Probá de nuevo.'
+};
+async function fnPost(nombre, cuerpo) {
+  const tok = await S.user.getIdToken();
+  let r;
+  try { r = await fetch(FN + '/' + nombre, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok }, body: JSON.stringify(Object.assign({ negocioId: S.negocioId }, cuerpo)) }); }
+  catch (e) { return { ok: false, error: 'sin_conexion', texto: 'No hay conexión con el servidor.' }; }
+  let d = {}; try { d = await r.json(); } catch (e) {}
+  if (!r.ok) return { ok: false, status: r.status, error: d.error, detalle: d.detalle, datos: d, texto: (ERRORES[d.error] || ('Error ' + r.status)) + (d.detalle ? ' (' + d.detalle + ')' : '') };
+  return Object.assign({ ok: true }, d);
+}
+
+// ============================================================ TEMA ============================================================
+function aplicarTema() { try { document.documentElement.setAttribute('data-theme', localStorage.getItem('cba_tema') === 'dark' ? 'dark' : 'light'); } catch (e) {} }
+function cambiarTema() { try { localStorage.setItem('cba_tema', localStorage.getItem('cba_tema') === 'dark' ? 'light' : 'dark'); } catch (e) {} aplicarTema(); }
+aplicarTema();
+
+// ============================================================ INVITACIÓN (link de un solo uso) ============================================================
+(function () {
+  try {
+    const inv = new URLSearchParams(location.search).get('inv');
+    if (inv && /^[A-Za-z0-9_-]{6,60}\.[A-Za-z0-9]{8,40}$/.test(inv)) { sessionStorage.setItem('cba_inv', inv); history.replaceState(null, '', location.pathname); }
+    if (sessionStorage.getItem('cba_inv')) $('aviso-invitacion').classList.remove('hidden');
+  } catch (e) {}
+})();
+
+// ============================================================ LOGIN ============================================================
+$('btn-toggle-register').addEventListener('click', () => {
   isRegister = !isRegister;
-  document.getElementById('btn-auth').textContent = isRegister ? 'Crear cuenta →' : 'Ingresar →';
-  document.getElementById('btn-toggle-register').textContent = isRegister ? '¿Ya tenés cuenta? Ingresá' : '¿No tenés cuenta? Creá una';
+  $('btn-auth').textContent = isRegister ? 'Crear cuenta →' : 'Ingresar →';
+  $('btn-toggle-register').textContent = isRegister ? '¿Ya tenés cuenta? Ingresá' : '¿No tenés cuenta? Creá una';
 });
-
-document.getElementById('btn-auth').addEventListener('click', async () => {
-  const email = document.getElementById('f-email').value.trim();
-  const pass = document.getElementById('f-pass').value;
-  const errEl = document.getElementById('auth-err');
+$('btn-auth').addEventListener('click', async () => {
+  const email = $('f-email').value.trim(), pass = $('f-pass').value, errEl = $('auth-err');
   errEl.classList.remove('show');
   if (!email || !pass) { errEl.textContent = 'Completá email y contraseña.'; errEl.classList.add('show'); return; }
-  const btn = document.getElementById('btn-auth'); btn.disabled = true;
-  try {
-    if (isRegister) await auth.createUserWithEmailAndPassword(email, pass);
-    else await auth.signInWithEmailAndPassword(email, pass);
-  } catch (e) {
-    errEl.textContent = 'Error: ' + e.message; errEl.classList.add('show');
-  }
+  const btn = $('btn-auth'); btn.disabled = true;
+  try { if (isRegister) await auth.createUserWithEmailAndPassword(email, pass); else await auth.signInWithEmailAndPassword(email, pass); }
+  catch (e) { errEl.textContent = 'Error: ' + (e.code || e.message); errEl.classList.add('show'); }
   btn.disabled = false;
 });
-
-document.getElementById('btn-google').addEventListener('click', async () => {
-  const errEl = document.getElementById('auth-err');
-  errEl.classList.remove('show');
-  try { await auth.signInWithPopup((window.rtProv||function(p){return p})(new firebase.auth.GoogleAuthProvider())); }
-  catch (e) { errEl.textContent = 'No se pudo ingresar con Google: ' + e.message; errEl.classList.add('show'); }
+$('btn-google').addEventListener('click', async () => {
+  const errEl = $('auth-err'); errEl.classList.remove('show');
+  try { await auth.signInWithPopup((window.rtProv || function (p) { return p; })(new firebase.auth.GoogleAuthProvider())); }
+  catch (e) { errEl.textContent = 'No se pudo ingresar con Google: ' + (e.code || e.message); errEl.classList.add('show'); }
 });
+$('btn-logout').addEventListener('click', () => auth.signOut());
+$('bloqueo-salir').addEventListener('click', () => auth.signOut());
 
-document.getElementById('btn-logout').addEventListener('click', () => auth.signOut());
+function mostrarPantalla(id) {
+  ['screen-login', 'screen-bloqueo', 'screen-app'].forEach(x => $(x).classList.toggle('active', x === id));
+}
+function detenerListeners() { Object.keys(S.unsub).forEach(k => { try { S.unsub[k](); } catch (e) {} }); S.unsub = {}; }
 
 auth.onAuthStateChanged(async user => {
-  currentUser = user;
-  document.getElementById('loading-screen').classList.add('hidden');
-  if (!user) {
-    document.getElementById('screen-app').classList.remove('active');
-    document.getElementById('screen-login').classList.add('active');
-    if (unsubConvs) unsubConvs();
-    if (unsubMsgs) unsubMsgs();
-    return;
+  S.user = user;
+  $('loading-screen').classList.add('hidden');
+  if (!user) { detenerListeners(); S.neg = null; mostrarPantalla('screen-login'); return; }
+  try { await iniciarSesion(user); }
+  catch (e) {
+    logError('iniciarSesion', e && (e.code || e.message));
+    const el = $('auth-err'); el.textContent = 'No se pudo abrir tu cuenta: ' + (e.code || e.message); el.classList.add('show');
+    mostrarPantalla('screen-login');
+    try { await auth.signOut(); } catch (x) {}
   }
-
-  const userRef = db.collection('usuarios').doc(user.uid);
-  let snap = await userRef.get();
-  if (!snap.exists) {
-    await userRef.set({ email: user.email, negocioId: user.uid, rolNegocio: 'owner', creadoEn: firebase.firestore.FieldValue.serverTimestamp() });
-    snap = await userRef.get();
-  }
-  userDoc = snap.data();
-  negocioId = userDoc.negocioId;
-
-  const negRef = db.collection('negocios').doc(negocioId);
-  const negSnap = await negRef.get();
-  if (!negSnap.exists) {
-    await negRef.set({
-      nombreNegocio: '', ownerUid: user.uid, systemPrompt: '', productos: [], faqs: [],
-      whatsapp: {}, features: { limiteMensajesMes: 200, handoffNivel: 'medio' },
-      mensajesEsteMes: 0, creadoEn: firebase.firestore.FieldValue.serverTimestamp(),
-    });
-  }
-
-  document.getElementById('user-email').textContent = user.email;
-  document.getElementById('screen-login').classList.remove('active');
-  document.getElementById('screen-app').classList.add('active');
-  cargarPantallaNegocio();
-  iniciarBandeja();
-  chequearBackupDiario();   // v0.2: backup automático diario
 });
 
-// ══════════ BACKUP ESTÁNDAR 0.2 ══════════
-function _bkHoy() {
-  const d = new Date();
-  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
-}
-function _bkSer(v) {
-  if (v && typeof v === 'object') {
-    if (typeof v.toMillis === 'function' && 'seconds' in v && 'nanoseconds' in v) return { __ts: [v.seconds, v.nanoseconds] };
-    if (Array.isArray(v)) return v.map(_bkSer);
-    const o = {}; Object.keys(v).forEach(k => { o[k] = _bkSer(v[k]); }); return o;
+async function iniciarSesion(user) {
+  // Cuenta admin: la puerta del panel la da el helper rtIsAdmin() del encabezado (solo comodidad de pantalla; la seguridad real la dan las reglas y el servidor)
+  S.esAdmin = !!(user.emailVerified === true && window.rtIsAdmin && window.rtIsAdmin());
+  const userRef = db.collection('usuarios').doc(user.uid);
+  let snap = await userRef.get();
+  let inv = null; try { inv = sessionStorage.getItem('cba_inv'); } catch (e) {}
+  if (!snap.exists) {
+    if (inv) {
+      const [negId, code] = inv.split('.');
+      try {
+        const b = db.batch();
+        b.set(userRef, { email: user.email || '', negocioId: negId, rolNegocio: 'agente', invCode: code, creadoEn: FV.serverTimestamp() });
+        b.update(db.collection('negocios').doc(negId).collection('invitaciones').doc(code), { usada: true, usadaPor: user.uid, usadaEn: FV.serverTimestamp() });
+        await b.commit();
+      } catch (e) { try { sessionStorage.removeItem('cba_inv'); } catch (x) {} throw { code: 'invitacion-invalida-o-usada' }; }
+      try { sessionStorage.removeItem('cba_inv'); } catch (e) {}
+    } else {
+      await userRef.set({ email: user.email || '', negocioId: user.uid, rolNegocio: 'owner', creadoEn: FV.serverTimestamp() });
+    }
+    snap = await userRef.get();
+  } else if (inv) { try { sessionStorage.removeItem('cba_inv'); } catch (e) {} setTimeout(() => toast('Esta cuenta ya pertenece a un negocio; la invitación no se usó.', true), 1500); }
+  S.userDoc = snap.data(); S.negocioId = S.userDoc.negocioId; S.esOwner = S.userDoc.rolNegocio === 'owner';
+
+  let nSnap = await nref().get();
+  if (!nSnap.exists && S.esOwner) {
+    await nref().set({
+      nombreNegocio: '', ownerUid: user.uid, systemPrompt: '', productos: [], faqs: [],
+      horario: { activo: false, dias: [1, 2, 3, 4, 5], desde: '09:00', hasta: '18:00' },
+      features: { limiteMensajesMes: DEF.limiteMensajesMes, limiteEnviosMes: DEF.limiteEnviosMes },
+      mensajesEsteMes: 0, enviosEsteMes: 0, demoHasta: TS.fromMillis(Date.now() + DIAS_PRUEBA * 864e5), creadoEn: FV.serverTimestamp()
+    });
+    nSnap = await nref().get();
+  } else if (nSnap.exists && S.esOwner && !('demoHasta' in nSnap.data())) {
+    // cuenta de antes de la prueba gratis: arranca sus 14 días al ingresar (sin tocar ningún dato)
+    await nref().update({ demoHasta: TS.fromMillis(Date.now() + DIAS_PRUEBA * 864e5) });
+    nSnap = await nref().get();
   }
-  return v;
-}
-function _bkRev(v) {
-  if (v && typeof v === 'object') {
-    if (Array.isArray(v)) return v.map(_bkRev);
-    if (Array.isArray(v.__ts) && v.__ts.length === 2) return new firebase.firestore.Timestamp(v.__ts[0], v.__ts[1]);
-    const o = {}; Object.keys(v).forEach(k => { o[k] = _bkRev(v[k]); }); return o;
-  }
-  return v;
-}
-async function _bkLeer(ref) {
-  const s = await ref.get();
-  return s.docs.map(d => Object.assign({ _id: d.id }, _bkSer(d.data())));
-}
-function _bkIdb(fecha, json) {
-  return new Promise(function (res) {
-    try {
-      const rq = indexedDB.open('centralbotar-backup', 1);
-      rq.onupgradeneeded = function () { rq.result.createObjectStore('b', { keyPath: 'fecha' }); };
-      rq.onsuccess = function () {
-        const idb = rq.result, tx = idb.transaction('b', 'readwrite'), st = tx.objectStore('b');
-        st.put({ fecha: fecha, json: json });
-        st.getAllKeys().onsuccess = function (e) { const ks = e.target.result.sort(); while (ks.length > 7) st.delete(ks.shift()); };
-        tx.oncomplete = function () { idb.close(); res(true); };
-        tx.onerror = tx.onabort = function () { idb.close(); res(false); };
-      };
-      rq.onerror = function () { res(false); };
-    } catch (e) { res(false); }
-  });
-}
-function _bkDescargar(json, fecha) {
-  const blob = new Blob([json], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = 'centralbotar-backup-' + fecha + '.json';
-  document.body.appendChild(a); a.click(); a.remove();
-  setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+  if (!nSnap.exists) throw { code: 'negocio-no-existe' };
+  S.neg = nSnap.data();
+
+  $('user-email').textContent = (user.email || '') + (S.esOwner ? '' : ' · agente');
+  armarNav();
+  evaluarBloqueo();
+  iniciarListeners();
+  confirmarAdmin();
+  if (S.esOwner) setTimeout(chequearBackupDiario, 8000);
+  if (S.esOwner) setTimeout(avisarCupo, 2500);
+  showPage(S.pagina && !$('page-' + S.pagina).classList.contains('hidden') ? S.pagina : 'bandeja');
 }
 
-// Automático una vez por día al entrar el dueño (baja un JSON y deja copia en IndexedDB), manual y restaurar en "Mi negocio".
-// Incluye: datos del negocio (nombre, personalidad del bot, productos, FAQs) y TODAS las conversaciones con sus mensajes.
-// NUNCA incluye el token de WhatsApp (ni el de verificación): es una credencial y el archivo queda en tu dispositivo.
-function _bkMsg(m, err) { const el = document.getElementById('bkMsg'); if (el) { el.textContent = m; el.style.color = err ? '#b91c1c' : '#15803d'; } if (err) console.warn(m); }
-function _bkPuede() { return !!(currentUser && userDoc && negocioId && userDoc.rolNegocio === 'owner'); }
-async function _bkCommit(ops) {
-  for (let i = 0; i < ops.length; i += 400) {
-    const batch = db.batch();
-    ops.slice(i, i + 400).forEach(function (o) { batch.set(o[0], o[1], { merge: true }); });
-    await batch.commit();
+// El servidor confirma si la cuenta es la del administrador (y le pone la marca "admin" a la sesión para las reglas)
+async function confirmarAdmin() {
+  try {
+    const r = await fnPost('quienSoy', {});
+    if (!r.ok) return;
+    if (r.refrescar) await S.user.getIdToken(true);
+    if (S.esAdmin !== r.esAdmin) { S.esAdmin = r.esAdmin; evaluarBloqueo(); }
+  } catch (e) { logError('confirmarAdmin', e && e.message); }
+}
+
+// ============================================================ PRUEBA GRATIS Y BLOQUEO (estándar punto 4) ============================================================
+function diasRestantes() { const d = S.neg && S.neg.demoHasta; return d && d.toMillis ? Math.ceil((d.toMillis() - Date.now()) / 864e5) : null; }
+function linkActivar() { return WA_ACTIVAR ? 'https://wa.me/' + WA_ACTIVAR + '?text=' + encodeURIComponent('Hola! Quiero activar mi cuenta de CentralbotAr.') : ''; }
+function evaluarBloqueo() {
+  const dias = diasRestantes(), vencida = S.neg && S.neg.demoHasta && S.neg.demoHasta.toMillis && S.neg.demoHasta.toMillis() < Date.now();
+  const bloq = !S.esAdmin && (S.neg.banned === true || vencida);
+  const href = linkActivar();
+  if (bloq) {
+    $('bloqueo-titulo').textContent = S.neg.banned === true ? 'Cuenta pausada' : 'Tu prueba gratis terminó';
+    const a = $('bloqueo-wa'); if (href) { a.href = href; a.style.display = 'block'; } else { a.style.display = 'none'; $('bloqueo-texto').textContent = 'Tus datos están guardados y no se pierde nada. Escribile a RavenTechs para activar tu cuenta.'; }
+    mostrarPantalla('screen-bloqueo'); return;
+  }
+  mostrarPantalla('screen-app');
+  const b = $('demo-banner');
+  if (dias !== null && !S.esAdmin) {
+    b.className = 'on' + (dias <= 3 ? ' rojo' : '');
+    b.innerHTML = '⏳ Prueba gratis: te ' + (dias === 1 ? 'queda 1 día' : 'quedan ' + Math.max(dias, 0) + ' días') + (href ? '<a href="' + href + '" target="_blank" rel="noopener">Activar mi cuenta</a>' : '');
+  } else { b.className = ''; b.innerHTML = ''; }
+}
+
+// ============================================================ NAVEGACIÓN ============================================================
+function armarNav() {
+  const items = [['bandeja', '📥', 'Bandeja de chats'], ['contactos', '👥', 'Contactos']];
+  if (S.esOwner) items.push(['campanas', '📣', 'Campañas'], ['plantillas', '🧩', 'Plantillas'], ['negocio', '🏪', 'Mi negocio'], ['lineas', '📲', 'Números de WhatsApp'], ['equipo', '🧑‍🤝‍🧑', 'Mi equipo']);
+  items.push(['config', '⚙️', 'Configuración']);
+  $('nav').innerHTML = items.map(i => `<div class="nav-item" data-act="nav" data-p="${i[0]}">${i[1]} ${esc(i[2])}${i[0] === 'bandeja' ? '<span class="badge hidden" id="badge-bandeja"></span>' : ''}</div>`).join('');
+  $('cfg-backup').classList.toggle('hidden', !S.esOwner); $('cfg-practica').classList.toggle('hidden', !S.esOwner);
+}
+function showPage(p) {
+  if (!$('page-' + p)) p = 'bandeja';
+  if (p === 'admin' && !S.esAdmin) p = 'bandeja';
+  S.pagina = p;
+  document.querySelectorAll('.page').forEach(x => x.classList.add('hidden'));
+  $('page-' + p).classList.remove('hidden');
+  document.querySelectorAll('.nav-item').forEach(x => x.classList.toggle('active', x.dataset.p === p));
+  $('sidebar').classList.remove('open');
+  ({ bandeja: renderBandeja, contactos: renderContactos, campanas: renderCampanas, plantillas: renderPlantillas, negocio: renderNegocio, lineas: renderLineas, equipo: renderEquipo, config: renderConfig, admin: renderAdmin }[p] || (() => {}))();
+}
+$('btn-menu').addEventListener('click', e => { e.stopPropagation(); $('sidebar').classList.toggle('open'); });
+document.addEventListener('click', e => { if ($('sidebar').classList.contains('open') && !e.target.closest('#sidebar') && !e.target.closest('#btn-menu')) $('sidebar').classList.remove('open'); });
+// menú oculto: 5 toques a «CentralbotAr» (estándar punto 2). Solo abre con la cuenta admin; la seguridad real la dan las reglas.
+let _taps = [];
+function tapBrand() {
+  const n = Date.now(); _taps = _taps.filter(t => n - t < 2500); _taps.push(n);
+  if (_taps.length >= 5) { _taps = []; if (S.esAdmin) showPage('admin'); }
+}
+$('brand-side').addEventListener('click', tapBrand); $('brand-top').addEventListener('click', tapBrand);
+
+// ============================================================ LISTENERS ============================================================
+function iniciarListeners() {
+  detenerListeners();
+  S.unsub.neg = nref().onSnapshot(s => { if (!s.exists) return; S.neg = s.data(); evaluarBloqueo(); if (S.pagina === 'config') renderConfig(); if (S.pagina === 'campanas') renderCampanas(); }, e => logError('neg', e.code));
+  S.unsub.convs = nref().collection('conversaciones').orderBy('ultimoMensajeFecha', 'desc').limit(300).onSnapshot(s => {
+    S.convs = s.docs.map(d => Object.assign({ id: d.id }, d.data()));
+    actualizarBadge(); if (S.pagina === 'bandeja') renderConvList();
+    if (S.convId && S.pagina === 'bandeja') refrescarCabeceraChat();
+  }, e => { $('conv-list').innerHTML = `<div class="empty-inbox">Error: ${esc(e.code || e.message)}</div>`; });
+  S.unsub.cont = nref().collection('contactos').limit(5000).onSnapshot(s => { S.contactos = s.docs.map(d => Object.assign({ id: d.id }, d.data())); if (S.pagina === 'contactos') renderContactos(); }, e => logError('contactos', e.code));
+  S.unsub.lin = nref().collection('lineas').onSnapshot(s => { S.lineas = s.docs.map(d => Object.assign({ id: d.id }, d.data())); if (S.pagina === 'lineas') renderLineas(); }, e => logError('lineas', e.code));
+  if (S.esOwner) {
+    S.unsub.pl = nref().collection('plantillas').orderBy('creadoEn', 'desc').onSnapshot(s => { S.plantillas = s.docs.map(d => Object.assign({ id: d.id }, d.data())); if (S.pagina === 'plantillas') renderPlantillas(); if (S.pagina === 'campanas') renderCampanas(); }, e => logError('plantillas', e.code));
+    S.unsub.cp = nref().collection('campanas').orderBy('creadoEn', 'desc').limit(100).onSnapshot(s => { S.campanas = s.docs.map(d => Object.assign({ id: d.id }, d.data())); if (S.pagina === 'campanas') renderCampanas(); }, e => logError('campanas', e.code));
   }
 }
+const PARA_ATENDER = ['derivado', 'pendiente_humano', 'nuevo'];
+function actualizarBadge() {
+  const n = S.convs.filter(c => PARA_ATENDER.includes(c.estado) && !c._demo).length, b = $('badge-bandeja');
+  if (b) { b.textContent = n; b.classList.toggle('hidden', !n); }
+}
+function avisarCupo() {
+  if (S.avisoCupo) return; const l = limite('limiteEnviosMes'), u = usado('enviosEsteMes');
+  if (l && u / l >= 0.8) { S.avisoCupo = true; toast('Usaste ' + u + ' de ' + l + ' envíos de campañas este mes.', true); }
+}
+
+// ============================================================ BANDEJA ============================================================
+const FILTROS = [['todos', 'Todas'], ['atender', 'Para atender'], ['bot', 'Respondió el bot'], ['atendido', 'Atendidas']];
+function estadoTag(c) {
+  const d = c._demo ? '🎓 ' : '';
+  if (c.estado === 'derivado') return d + (c.urgente ? '<span class="tag red">🚨 Urgente</span>' : '<span class="tag warn">🙋 Derivado</span>');
+  if (c.estado === 'pendiente_humano') return d + '<span class="tag warn">⏳ Esperándote</span>';
+  if (c.estado === 'nuevo') return d + '<span class="tag warn">Nuevo</span>';
+  if (c.estado === 'respondido_auto') return d + '<span class="tag gris">🤖 Bot</span>';
+  if (c.estado === 'atendido') return d + '<span class="tag">✅ Atendido</span>';
+  return d + '<span class="tag gris">Cerrado</span>';
+}
+function renderBandeja() {
+  $('filtros-bandeja').innerHTML = FILTROS.map(f => `<button data-act="filtro-bandeja" data-v="${f[0]}" class="${S.filtroBandeja === f[0] ? 'on' : ''}">${f[1]}</button>`).join('');
+  renderConvList();
+}
+function convsFiltradas() {
+  const f = S.filtroBandeja;
+  return S.convs.filter(c => f === 'todos' ? true : f === 'atender' ? PARA_ATENDER.includes(c.estado) : f === 'bot' ? c.estado === 'respondido_auto' : (c.estado === 'atendido' || c.estado === 'cerrado'));
+}
+function renderConvList() {
+  const cont = $('conv-list'), lista = convsFiltradas();
+  if (!lista.length) { cont.innerHTML = `<div class="empty-inbox">${S.convs.length ? 'No hay chats en este filtro.' : 'Todavía no llegó ningún mensaje.'}</div>`; return; }
+  cont.innerHTML = lista.map(c => `<div class="conv-row ${c.id === S.convId ? 'active' : ''}" data-act="conv-abrir" data-id="${esc(c.id)}">
+      <div class="name"><span>${esc(c.nombre || c.telefono || c.id)}</span><span class="muted">${esc(fmt(c.ultimoMensajeFecha))}</span></div>
+      <div class="preview">${esc((c.ultimoMensaje || '').slice(0, 70))}</div><div>${estadoTag(c)}</div></div>`).join('');
+}
+function convActual() { return S.convs.find(c => c.id === S.convId); }
+function nombreLinea(id) { const l = S.lineas.find(x => x.id === id); return l ? l.nombre : ''; }
+function ventanaAbierta(c) { return c._demo || (Date.now() - ms(c.ultimoMensajeCliente)) < 24 * 3600 * 1000; }
+function abrirConversacion(id) {
+  S.convId = id; $('inbox-wrap').classList.add('chat-open');
+  $('chat-area').innerHTML = `<div class="chat-header" id="chat-head"></div><div id="chat-aviso"></div><div class="chat-msgs" id="chat-msgs"><div class="empty-inbox">Cargando mensajes...</div></div>
+    <div class="chat-input"><input id="chat-input-text" placeholder="Escribí una respuesta..." maxlength="1500" autocomplete="off"/><button class="btn-sm gold" id="btn-chat-enviar" data-act="chat-enviar">Enviar</button></div>`;
+  pintarCabecera(); renderConvList();
+  if (S.unsub.msgs) S.unsub.msgs();
+  S.unsub.msgs = nref().collection('conversaciones').doc(id).collection('mensajes').orderBy('timestamp', 'asc').limit(300).onSnapshot(snap => {
+    const el = $('chat-msgs'); if (!el) return;
+    el.innerHTML = snap.docs.map(d => { const m = d.data(); return `<div class="bubble ${esc(m.autor)}">${esc(m.texto)}<small>${esc(fmt(m.timestamp))}${m.autor === 'bot' ? ' · bot' : ''}${m.ok === false ? ' · ⚠️ no se envió' : ''}</small></div>`; }).join('');
+    el.scrollTop = el.scrollHeight;
+  }, e => { const el = $('chat-msgs'); if (el) el.innerHTML = `<div class="empty-inbox">Error: ${esc(e.code || e.message)}</div>`; });
+}
+function pintarCabecera() {
+  const c = convActual(), h = $('chat-head'); if (!c || !h) return;
+  h.innerHTML = `<div><button class="btn-sm outline btn-volver" data-act="chat-volver">‹ Volver</button> <strong>${esc(c.nombre || c.telefono)}</strong>
+    <div class="muted">${esc(c.telefono || '')}${nombreLinea(c.lineaId) ? ' · ' + esc(nombreLinea(c.lineaId)) : ''} · ${estadoTag(c)}</div>${c.motivoDerivacion ? `<div class="muted">Motivo: ${esc(c.motivoDerivacion)}</div>` : ''}</div>
+    <div class="row"><button class="btn-sm ${c.modoManual ? 'gold' : 'outline'}" data-act="chat-manual">${c.modoManual ? '🤖 Devolver al bot' : '🙋 Tomar control'}</button>
+    <button class="btn-sm outline" data-act="chat-estado" data-v="${c.estado === 'atendido' ? 'cerrado' : 'atendido'}">${c.estado === 'atendido' ? 'Cerrar' : '✅ Marcar atendido'}</button></div>`;
+  const av = $('chat-aviso'), inp = $('chat-input-text'), btn = $('btn-chat-enviar');
+  const abierta = ventanaAbierta(c);
+  av.innerHTML = abierta ? '' : '<div class="aviso-24">Pasaron más de 24 h desde el último mensaje de este cliente: WhatsApp solo permite escribirle con una plantilla (usá una campaña).</div>';
+  if (inp) { inp.disabled = !abierta; inp.placeholder = abierta ? 'Escribí una respuesta...' : 'Fuera de la ventana de 24 h'; }
+  if (btn) btn.disabled = !abierta;
+}
+function refrescarCabeceraChat() { if (convActual()) pintarCabecera(); }
+async function chatEnviar() {
+  const c = convActual(), inp = $('chat-input-text'); if (!c || !inp) return;
+  const texto = inp.value.trim(); if (!texto) return;
+  const btn = $('btn-chat-enviar'); btn.disabled = true;
+  try {
+    if (c._demo) {   // práctica: solo se simula, no sale a WhatsApp
+      await nref().collection('conversaciones').doc(c.id).collection('mensajes').add({ texto, autor: 'humano', timestamp: FV.serverTimestamp(), ok: true, _demo: true });
+      await nref().collection('conversaciones').doc(c.id).update({ ultimoMensaje: texto, ultimoMensajeFecha: FV.serverTimestamp(), estado: 'atendido', modoManual: true });
+      inp.value = ''; toast('🎓 Práctica: mensaje simulado, no salió a WhatsApp');
+    } else {
+      const r = await fnPost('enviarMensaje', { convId: c.id, texto });
+      if (!r.ok) { toast(r.texto, true); } else { inp.value = ''; }
+    }
+  } finally { btn.disabled = false; }
+}
+async function chatManual() { const c = convActual(); if (!c) return; await nref().collection('conversaciones').doc(c.id).update({ modoManual: !c.modoManual }); }
+async function chatEstado(v) { const c = convActual(); if (!c) return; await nref().collection('conversaciones').doc(c.id).update({ estado: v }); }
+document.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target && e.target.id === 'chat-input-text') chatEnviar(); });
+
+// ============================================================ CONTACTOS ============================================================
+// Normaliza teléfonos argentinos al formato de WhatsApp (549 + área + número). Devuelve '' si no se puede.
+function normTel(raw) {
+  let d = String(raw || '').replace(/\D/g, ''); if (!d) return '';
+  if (d.startsWith('00')) d = d.slice(2);
+  if (d.startsWith('54')) {
+    d = d.slice(2);
+    if (d.startsWith('9')) d = d.slice(1);
+  }
+  if (d.startsWith('0')) d = d.slice(1);
+  if (d.length === 12) {   // área + 15 + número: se saca el 15
+    for (const a of [2, 3, 4]) { if (d.slice(a, a + 2) === '15' && d.length - 2 === 10) { d = d.slice(0, a) + d.slice(a + 2); break; } }
+  }
+  if (d.length !== 10) return '';
+  return '549' + d;
+}
+function consentTag(c) {
+  if (c.baja) return '<span class="tag red">🚫 Baja</span>';
+  return c.consentimiento && c.consentimiento.estado === 'si' ? '<span class="tag">✅ Con OK</span>' : '<span class="tag warn">⚠️ Sin OK</span>';
+}
+function etiquetasUnicas() { const s = new Set(); S.contactos.forEach(c => (c.etiquetas || []).forEach(t => s.add(t))); return Array.from(s).sort(); }
+function conOk(c) { return !c.baja && c.consentimiento && c.consentimiento.estado === 'si'; }
+function renderContactos() {
+  const lista = S.contactos, real = lista.filter(c => !c._demo);
+  $('contactos-stats').innerHTML = `<div class="stat"><b>${lista.length}</b><span>Contactos</span></div><div class="stat"><b>${lista.filter(conOk).length}</b><span>Con OK para campañas</span></div><div class="stat"><b>${lista.filter(c => !c.baja && !conOk(c)).length}</b><span>Sin OK (solo chat)</span></div><div class="stat"><b>${lista.filter(c => c.baja).length}</b><span>Bajas</span></div>`;
+  const sel = $('ct-filtro'), actual = sel.value || 'todos';
+  sel.innerHTML = '<option value="todos">Todos</option><option value="ok">Con OK</option><option value="sinok">Sin OK</option><option value="baja">Bajas</option>' + etiquetasUnicas().map(t => `<option value="tag:${esc(t)}">Etiqueta: ${esc(t)}</option>`).join('');
+  sel.value = Array.from(sel.options).some(o => o.value === actual) ? actual : 'todos';
+  $('ct-botones').classList.toggle('hidden', !S.esOwner);
+  const q = $('ct-buscar').value.trim().toLowerCase(), f = sel.value;
+  let v = lista.filter(c => (!q || (c.nombre || '').toLowerCase().includes(q) || (c.telefono || c.id).includes(q.replace(/\D/g, '') || '\u0000')) &&
+    (f === 'todos' || (f === 'ok' && conOk(c)) || (f === 'sinok' && !c.baja && !conOk(c)) || (f === 'baja' && c.baja) || (f.startsWith('tag:') && (c.etiquetas || []).includes(f.slice(4)))));
+  v.sort((a, b) => (a.nombre || '').localeCompare(b.nombre || ''));
+  const total = v.length; v = v.slice(0, 200);
+  $('ct-lista').innerHTML = (v.length ? v.map(c => `<div class="fila"><div class="info"><b>${c._demo ? '🎓 ' : ''}${esc(c.nombre || '(sin nombre)')}</b><span class="muted">${esc(c.telefono || c.id)}</span><div>${consentTag(c)}${(c.etiquetas || []).map(t => `<span class="tag gris">${esc(t)}</span>`).join('')}</div></div>
+    ${S.esOwner ? `<div class="acc"><button class="ico" data-act="ct-editar" data-id="${esc(c.id)}" aria-label="Editar">✏️</button><button class="ico" data-act="ct-borrar" data-id="${esc(c.id)}" aria-label="Borrar">🗑</button></div>` : ''}</div>`).join('') : '<div class="vacio">No hay contactos para mostrar. Importá tu planilla o esperá a que alguien te escriba.</div>') + (total > 200 ? `<p class="muted">Mostrando 200 de ${total}. Usá el buscador o los filtros.</p>` : '');
+}
+['ct-buscar', 'ct-filtro'].forEach(id => { $(id).addEventListener('input', renderContactos); $(id).addEventListener('change', renderContactos); });
+function parseEtiquetas(s) { return Array.from(new Set(String(s || '').split(/[;|,]/).map(x => x.trim()).filter(Boolean))).slice(0, 12); }
+function modalContacto(id) {
+  const c = id ? S.contactos.find(x => x.id === id) : null;
+  abrirModal(`<h3>${c ? 'Editar contacto' : 'Nuevo contacto'}</h3>
+    <div class="field"><label>Nombre</label><input id="mc-nombre" maxlength="80" value="${esc(c ? c.nombre : '')}"/></div>
+    <div class="field"><label>Teléfono (con código de área)</label><input id="mc-tel" inputmode="tel" value="${esc(c ? (c.telefono || c.id) : '')}" ${c ? 'readonly' : ''} placeholder="Ej: 11 5555-1234"/></div>
+    <div class="field"><label>Etiquetas (separadas por coma)</label><input id="mc-tags" maxlength="200" value="${esc(c ? (c.etiquetas || []).join(', ') : '')}" placeholder="cámaras, alarmas, interesado"/></div>
+    <label style="font-size:13px"><input type="checkbox" id="mc-ok" ${c && conOk(c) ? 'checked' : ''}/> Esta persona aceptó recibir mensajes de mi negocio</label><br>
+    ${c ? `<label style="font-size:13px"><input type="checkbox" id="mc-baja" ${c.baja ? 'checked' : ''}/> Dado de baja (no recibe campañas)</label>` : ''}
+    <p class="err-msg" id="mc-err"></p>
+    <div class="row" style="margin-top:14px"><button class="btn-sm gold" data-act="ct-guardar" data-id="${esc(id || '')}">💾 Guardar</button><button class="btn-sm outline" data-act="modal-cerrar">Cancelar</button></div>`);
+}
+async function guardarContacto(id) {
+  const nombre = $('mc-nombre').value.trim(), tags = parseEtiquetas($('mc-tags').value), ok = $('mc-ok').checked, err = $('mc-err');
+  const tel = id || normTel($('mc-tel').value);
+  if (!tel) { err.textContent = 'El teléfono no es válido. Poné código de área y número (ej: 11 5555-1234).'; err.classList.add('show'); return; }
+  const previo = S.contactos.find(x => x.id === tel);
+  if (!id && previo) { err.textContent = 'Ese teléfono ya está cargado (' + (previo.nombre || 'sin nombre') + ').'; err.classList.add('show'); return; }
+  const datos = { nombre, telefono: tel, etiquetas: tags };
+  if (!previo) { datos.origen = 'manual'; datos.baja = false; datos.creadoEn = FV.serverTimestamp(); }
+  if (ok && !(previo && conOk(previo))) datos.consentimiento = { estado: 'si', fuente: 'manual', fecha: FV.serverTimestamp() };
+  if (!ok && previo && conOk(previo)) datos.consentimiento = { estado: 'desconocido', fuente: 'manual', fecha: FV.serverTimestamp() };
+  if (id && $('mc-baja')) datos.baja = $('mc-baja').checked;
+  await nref().collection('contactos').doc(tel).set(datos, { merge: true });
+  cerrarModal(); toast('Contacto guardado');
+}
+async function borrarContacto(id) {
+  const c = S.contactos.find(x => x.id === id); if (!c) return;
+  if (!confirm('¿Borrar a ' + (c.nombre || c.id) + '? Si vuelve a escribirte se crea de nuevo.')) return;
+  await nref().collection('contactos').doc(id).delete(); toast('Contacto borrado');
+}
+// importar planilla
+let _imp = null;
+function splitCSV(l, d) { const out = []; let cur = '', q = false; for (let i = 0; i < l.length; i++) { const ch = l[i]; if (ch === '"') { if (q && l[i + 1] === '"') { cur += '"'; i++; } else q = !q; } else if (ch === d && !q) { out.push(cur); cur = ''; } else cur += ch; } out.push(cur); return out.map(s => s.trim()); }
+function parsearTabla(texto) {
+  const lineas = String(texto || '').replace(/^﻿/, '').split(/\r?\n/).filter(l => l.trim()); if (!lineas.length) return [];
+  const delim = ['\t', ';', ','].map(d => [d, lineas[0].split(d).length]).sort((a, b) => b[1] - a[1])[0][0];
+  let filas = lineas.map(l => splitCSV(l, delim));
+  let iN = 0, iT = 1, iE = 2;
+  const cab = filas[0].map(x => x.toLowerCase());
+  if (cab.some(x => /nombre|name|tel|cel|whats|phone/.test(x)) && !cab.some(x => /\d{8,}/.test(x.replace(/\D/g, '')))) {
+    const f = re => cab.findIndex(x => re.test(x));
+    iN = f(/nombre|name|contacto/); iT = f(/tel|cel|whats|phone|m[oó]vil/); iE = f(/etiq|tag|inter|categ/);
+    filas = filas.slice(1);
+  } else if (filas[0] && normTel(filas[0][0]) && !normTel(filas[0][1])) { iN = 1; iT = 0; }
+  return filas.map(f => ({ nombre: iN >= 0 ? (f[iN] || '') : '', tel: normTel(iT >= 0 ? f[iT] : ''), crudo: iT >= 0 ? (f[iT] || '') : '', tags: iE >= 0 ? parseEtiquetas(f[iE]) : [] }));
+}
+function modalImportar() {
+  _imp = null;
+  abrirModal(`<h3>📥 Importar contactos</h3>
+    <p class="muted" style="margin-top:0">Pegá tu planilla (columnas: nombre, teléfono, etiquetas) o elegí un archivo .csv. Con Excel o Google Sheets: copiá las celdas y pegalas acá.</p>
+    <textarea id="im-texto" rows="6" placeholder="Nombre	Teléfono	Etiquetas&#10;Ana Pérez	11 5555-1234	cámaras"></textarea>
+    <div class="row" style="margin:8px 0"><input type="file" id="im-file" accept=".csv,.txt,text/csv,text/plain" class="grow"/></div>
+    <div class="field"><label>Etiqueta para todos los importados (opcional)</label><input id="im-tag" maxlength="40" placeholder="Ej: consultas-2026"/></div>
+    <label style="font-size:13px"><input type="checkbox" id="im-ok"/> Confirmo que estas personas aceptaron recibir mensajes de mi negocio</label>
+    <p class="muted">Si no lo tildás, se cargan igual pero «sin OK»: podrás chatear con ellos si te escriben, pero no entran en campañas.</p>
+    <div id="im-prev"></div>
+    <div class="row" style="margin-top:12px"><button class="btn-sm" data-act="im-revisar">🔍 Revisar</button><button class="btn-sm gold hidden" id="im-go" data-act="im-importar">Importar</button><button class="btn-sm outline" data-act="modal-cerrar">Cancelar</button></div>`);
+  $('im-file').addEventListener('change', async e => { const f = e.target.files[0]; if (f) { $('im-texto').value = await f.text(); revisarImportacion(); } });
+}
+function revisarImportacion() {
+  const filas = parsearTabla($('im-texto').value), vistos = new Map(), malas = [];
+  filas.forEach(f => { if (!f.tel) { malas.push(f); return; } const p = vistos.get(f.tel); if (p) { p.tags = Array.from(new Set(p.tags.concat(f.tags))); if (!p.nombre) p.nombre = f.nombre; } else vistos.set(f.tel, Object.assign({}, f)); });
+  _imp = Array.from(vistos.values());
+  const nuevos = _imp.filter(f => !S.contactos.some(c => c.id === '549' + f.tel.slice(3)) ).length;
+  $('im-prev').innerHTML = `<div class="card" style="margin:10px 0"><b>${_imp.length}</b> teléfonos válidos (${nuevos} nuevos, ${_imp.length - nuevos} ya existían) · <b>${malas.length}</b> con teléfono inválido${filas.length - _imp.length - malas.length ? ` · ${filas.length - _imp.length - malas.length} repetidos en la planilla (se unieron)` : ''}
+    ${_imp.length ? `<table class="t"><tr><th>Nombre</th><th>WhatsApp</th><th>Etiquetas</th></tr>${_imp.slice(0, 6).map(f => `<tr><td>${esc(f.nombre)}</td><td>${esc(f.tel)}</td><td>${esc(f.tags.join(', '))}</td></tr>`).join('')}</table>` : ''}
+    ${malas.length ? `<p class="muted">Inválidos (se omiten): ${malas.slice(0, 5).map(m => esc(m.crudo || '(vacío)')).join(' · ')}${malas.length > 5 ? '…' : ''}</p>` : ''}</div>`;
+  $('im-go').classList.toggle('hidden', !_imp.length); if (_imp.length) $('im-go').textContent = 'Importar ' + _imp.length + ' contactos';
+}
+async function ejecutarImportacion() {
+  if (!_imp || !_imp.length) return;
+  const extra = $('im-tag').value.trim(), ok = $('im-ok').checked, btn = $('im-go'); btn.disabled = true; btn.textContent = 'Importando...';
+  const ops = _imp.map(f => {
+    const previo = S.contactos.find(c => c.id === f.tel);
+    const tags = Array.from(new Set((previo ? previo.etiquetas || [] : []).concat(f.tags, extra ? [extra] : []))).slice(0, 12);
+    const d = { nombre: (previo && previo.nombre) || f.nombre, telefono: f.tel, etiquetas: tags };
+    if (!previo) { d.origen = 'planilla'; d.baja = false; d.creadoEn = FV.serverTimestamp(); d.consentimiento = ok ? { estado: 'si', fuente: 'planilla_declarada', fecha: FV.serverTimestamp() } : { estado: 'desconocido', fuente: 'planilla', fecha: FV.serverTimestamp() }; }
+    else if (ok && !previo.baja && !conOk(previo)) d.consentimiento = { estado: 'si', fuente: 'planilla_declarada', fecha: FV.serverTimestamp() };
+    return [f.tel, d];
+  });
+  for (let i = 0; i < ops.length; i += 400) { const b = db.batch(); ops.slice(i, i + 400).forEach(o => b.set(nref().collection('contactos').doc(o[0]), o[1], { merge: true })); await b.commit(); }
+  cerrarModal(); toast('✅ ' + ops.length + ' contactos importados');
+}
+function exportarContactos() {
+  const filas = [['nombre', 'telefono', 'etiquetas', 'consentimiento', 'baja']].concat(S.contactos.filter(c => !c._demo).map(c => [c.nombre || '', c.telefono || c.id, (c.etiquetas || []).join(';'), (c.consentimiento && c.consentimiento.estado) || '', c.baja ? 'si' : 'no']));
+  const csv = '﻿' + filas.map(f => f.map(x => '"' + String(x).replace(/"/g, '""') + '"').join(',')).join('\r\n');
+  descargar(csv, 'centralbotar-contactos-' + hoy() + '.csv', 'text/csv');
+}
+function hoy() { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+function descargar(contenido, nombre, tipo) { const url = URL.createObjectURL(new Blob([contenido], { type: tipo })); const a = document.createElement('a'); a.href = url; a.download = nombre; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 4000); }
+
+// ============================================================ PLANTILLAS ============================================================
+function varsDe(texto) { const s = new Set(); String(texto || '').replace(/\{\{(\d+)\}\}/g, (m, n) => { s.add(parseInt(n, 10)); return m; }); return Array.from(s).sort((a, b) => a - b); }
+function renderPlantillas() {
+  $('pl-lista').innerHTML = S.plantillas.length ? S.plantillas.map(p => `<div class="card"><div class="row" style="justify-content:space-between"><b>${p._demo ? '🎓 ' : ''}${esc(p.titulo || p.nombre)}</b><span class="tag ${p.estado === 'aprobada' ? '' : p.estado === 'rechazada' ? 'red' : 'warn'}">${p.estado === 'aprobada' ? '✅ Aprobada' : p.estado === 'rechazada' ? '✖ Rechazada' : '⏳ En revisión'}</span></div>
+    <div class="muted">${esc(p.nombre)} · ${esc(p.idioma)} · ${p.categoria === 'UTILITY' ? 'Utilidad' : 'Marketing'}</div>
+    <p style="white-space:pre-wrap;background:var(--soft);padding:10px;border-radius:8px;font-size:13px">${esc(p.texto)}</p>
+    <div class="row"><button class="btn-sm outline" data-act="pl-copiar" data-id="${esc(p.id)}">📋 Copiar texto para Meta</button><button class="btn-sm outline" data-act="pl-editar" data-id="${esc(p.id)}">✏️ Editar</button><button class="btn-sm outline" data-act="pl-borrar" data-id="${esc(p.id)}">🗑</button></div></div>`).join('') : '<div class="vacio">Todavía no registraste plantillas.</div>';
+}
+function modalPlantilla(id) {
+  const p = id ? S.plantillas.find(x => x.id === id) : null;
+  abrirModal(`<h3>${p ? 'Editar plantilla' : 'Nueva plantilla'}</h3>
+    <div class="field"><label>Título (para reconocerla vos)</label><input id="mp-titulo" maxlength="60" value="${esc(p ? p.titulo : '')}" placeholder="Ej: Oferta cámaras noviembre"/></div>
+    <div class="field"><label>Nombre en Meta (minúsculas, números y _)</label><input id="mp-nombre" maxlength="60" value="${esc(p ? p.nombre : '')}" placeholder="oferta_camaras_nov"/></div>
+    <div class="row"><div class="grow"><label class="muted">Idioma</label><select id="mp-idioma"><option value="es_AR">Español (Argentina)</option><option value="es">Español</option><option value="es_MX">Español (México)</option></select></div>
+    <div class="grow"><label class="muted">Categoría</label><select id="mp-cat"><option value="MARKETING">Marketing (ofertas)</option><option value="UTILITY">Utilidad (avisos de servicio)</option></select></div></div>
+    <div class="field" style="margin-top:12px"><label>Texto. Usá {{1}}, {{2}}… para datos variables</label><textarea id="mp-texto" rows="5" maxlength="1000" placeholder="Hola {{1}}! Esta semana tenés {{2}} en cámaras de seguridad. ¿Querés que te pasemos precios?">${esc(p ? p.texto : '')}</textarea></div>
+    <div id="mp-vars"></div>
+    <div class="field"><label>Estado en Meta</label><select id="mp-estado"><option value="pendiente">En revisión</option><option value="aprobada">Aprobada</option><option value="rechazada">Rechazada</option></select></div>
+    <p class="err-msg" id="mp-err"></p>
+    <div class="row"><button class="btn-sm gold" data-act="pl-guardar" data-id="${esc(id || '')}">💾 Guardar</button><button class="btn-sm outline" data-act="modal-cerrar">Cancelar</button></div>`);
+  if (p) { $('mp-idioma').value = p.idioma || 'es_AR'; $('mp-cat').value = p.categoria || 'MARKETING'; $('mp-estado').value = p.estado || 'pendiente'; }
+  window._mpVars = p ? (p.vars || []) : [];
+  const pintarVars = () => {
+    const n = varsDe($('mp-texto').value); const cont = $('mp-vars');
+    cont.innerHTML = n.length ? '<label class="muted">¿Qué va en cada dato variable?</label>' + n.map((v, i) => { const cur = window._mpVars[i] || { tipo: i === 0 ? 'nombre' : 'fijo', valor: '' };
+      return `<div class="row" style="margin:6px 0"><b>{{${v}}}</b><select data-var="${i}" data-campo="tipo" style="width:auto"><option value="nombre" ${cur.tipo === 'nombre' ? 'selected' : ''}>Nombre del contacto</option><option value="fijo" ${cur.tipo === 'fijo' ? 'selected' : ''}>Texto fijo</option></select><input class="grow" data-var="${i}" data-campo="valor" value="${esc(cur.valor || '')}" placeholder="Texto fijo (ej: 15% de descuento)" ${cur.tipo === 'nombre' ? 'disabled' : ''}/></div>`; }).join('') : '';
+    cont.querySelectorAll('[data-var]').forEach(el => el.addEventListener('input', () => { const i = +el.dataset.var; window._mpVars[i] = window._mpVars[i] || { tipo: 'fijo', valor: '' }; window._mpVars[i][el.dataset.campo] = el.value; if (el.dataset.campo === 'tipo') pintarVars(); }));
+  };
+  $('mp-texto').addEventListener('input', pintarVars);
+  $('mp-titulo').addEventListener('input', () => { if (!p && !$('mp-nombre').dataset.manual) $('mp-nombre').value = slug($('mp-titulo').value); });
+  $('mp-nombre').addEventListener('input', () => { $('mp-nombre').dataset.manual = '1'; });
+  pintarVars();
+}
+async function guardarPlantilla(id) {
+  const titulo = $('mp-titulo').value.trim(), nombre = $('mp-nombre').value.trim(), texto = $('mp-texto').value.trim(), err = $('mp-err');
+  const mal = m => { err.textContent = m; err.classList.add('show'); };
+  if (!titulo || !texto) return mal('Completá el título y el texto.');
+  if (!/^[a-z0-9_]{1,60}$/.test(nombre)) return mal('El nombre en Meta solo puede tener minúsculas, números y guion bajo (_).');
+  const n = varsDe(texto); if (n.some((v, i) => v !== i + 1)) return mal('Las variables tienen que ser {{1}}, {{2}}, {{3}}… en orden y sin saltear.');
+  const vars = n.map((v, i) => { const x = (window._mpVars || [])[i] || { tipo: i === 0 ? 'nombre' : 'fijo', valor: '' }; return { tipo: x.tipo === 'nombre' ? 'nombre' : 'fijo', valor: x.tipo === 'nombre' ? '' : String(x.valor || '').slice(0, 200) }; });
+  if (vars.some(x => x.tipo === 'fijo' && !x.valor)) return mal('Completá el texto fijo de cada dato variable.');
+  const d = { titulo, nombre, idioma: $('mp-idioma').value, categoria: $('mp-cat').value, texto, vars, estado: $('mp-estado').value };
+  if (id) await nref().collection('plantillas').doc(id).update(d); else { d.creadoEn = FV.serverTimestamp(); await nref().collection('plantillas').add(d); }
+  cerrarModal(); toast('Plantilla guardada');
+}
+
+// ============================================================ CAMPAÑAS ============================================================
+function elegibles(etiqueta, demo) { return S.contactos.filter(c => !!c._demo === !!demo && conOk(c) && (!etiqueta || (c.etiquetas || []).includes(etiqueta)) && String(c.telefono || c.id).replace(/\D/g, '').length >= 10); }
+function cupoEnvios() { return Math.max(0, limite('limiteEnviosMes') - usado('enviosEsteMes')); }
+function renderCampanas() {
+  $('cp-cupo').textContent = 'Envíos este mes: ' + usado('enviosEsteMes') + ' de ' + limite('limiteEnviosMes') + ' (te quedan ' + cupoEnvios() + ')';
+  const colores = { borrador: 'warn', enviando: 'warn', completa: '' };
+  $('cp-lista').innerHTML = S.campanas.length ? S.campanas.map(c => {
+    const pl = S.plantillas.find(p => p.id === c.plantillaId), pct = c.total ? Math.round(((c.enviados || 0) + (c.fallidos || 0)) / c.total * 100) : 0;
+    return `<div class="card"><div class="row" style="justify-content:space-between"><b>${c._demo ? '🎓 ' : ''}${esc(c.nombre)}</b><span class="tag ${colores[c.estado] || 'gris'}">${c.estado === 'borrador' ? 'Borrador' : c.estado === 'enviando' ? '📤 Enviando' : c.simulada ? '✅ Simulada' : '✅ Completa'}</span></div>
+      <div class="muted">Plantilla: ${esc(pl ? (pl.titulo || pl.nombre) : '—')} · Destino: ${c.etiqueta ? 'etiqueta «' + esc(c.etiqueta) + '»' : 'todos con OK'}${nombreLinea(c.lineaId) ? ' · ' + esc(nombreLinea(c.lineaId)) : ''}</div>
+      ${c.total ? `<div class="barra"><i style="width:${pct}%"></i></div><div class="muted">Enviados ${c.enviados || 0} de ${c.total}${c.fallidos ? ' · ⚠️ ' + c.fallidos + ' fallaron' : ''}${c.entregados ? ' · entregados ' + c.entregados : ''}${c.leidos ? ' · leídos ' + c.leidos : ''}${c.omitidosPorTope ? ' · ' + c.omitidosPorTope + ' quedaron afuera por el tope mensual' : ''}${c.omitidosPorBaja ? ' · ' + c.omitidosPorBaja + ' se dieron de baja' : ''}</div>` : ''}
+      ${c.ultimoError ? `<div class="muted" style="color:var(--red)">Último error de Meta: ${esc(c.ultimoError)}</div>` : ''}
+      <div class="row" style="margin-top:8px">${c.estado === 'borrador' ? `<button class="btn-sm gold" data-act="cp-enviar" data-id="${esc(c.id)}">🚀 Enviar</button>` : ''}${c.estado === 'enviando' ? `<button class="btn-sm gold" data-act="cp-continuar" data-id="${esc(c.id)}">▶ Continuar envío</button>` : ''}${c.estado !== 'enviando' ? `<button class="btn-sm outline" data-act="cp-borrar" data-id="${esc(c.id)}">🗑 Borrar</button>` : ''}</div></div>`;
+  }).join('') : '<div class="vacio">Todavía no hiciste campañas.</div>';
+}
+function modalCampana() {
+  const aprob = S.plantillas.filter(p => p.estado === 'aprobada');
+  if (!aprob.length) { abrirModal('<h3>Falta una plantilla aprobada</h3><p class="muted">Para enviar una campaña necesitás una plantilla aprobada por Meta. Cargala en <b>Plantillas</b> (o usá la de práctica desde Configuración).</p><button class="btn-sm" data-act="modal-cerrar">Entendido</button>'); return; }
+  abrirModal(`<h3>Nueva campaña</h3>
+    <div class="field"><label>Nombre</label><input id="mk-nombre" maxlength="60" placeholder="Ej: Oferta cámaras - interesados"/></div>
+    <div class="field"><label>Plantilla</label><select id="mk-pl">${aprob.map(p => `<option value="${esc(p.id)}">${p._demo ? '🎓 ' : ''}${esc(p.titulo || p.nombre)}</option>`).join('')}</select></div>
+    <div class="field"><label>Para quién</label><select id="mk-tag"><option value="">Todos los que dieron OK</option>${etiquetasUnicas().map(t => `<option value="${esc(t)}">Etiqueta: ${esc(t)}</option>`).join('')}</select></div>
+    <div class="field" id="mk-linea-box"><label>Enviar desde el número</label><select id="mk-linea">${S.lineas.map(l => `<option value="${esc(l.id)}">${esc(l.nombre)}${l.display ? ' (' + esc(l.display) + ')' : ''}</option>`).join('')}</select></div>
+    <div class="card" id="mk-info" style="background:var(--soft)"></div>
+    <div class="row"><button class="btn-sm gold" data-act="cp-crear">Crear borrador</button><button class="btn-sm outline" data-act="modal-cerrar">Cancelar</button></div>`);
+  const info = () => {
+    const pl = S.plantillas.find(p => p.id === $('mk-pl').value), demo = !!(pl && pl._demo), n = elegibles($('mk-tag').value, demo).length, cupo = cupoEnvios();
+    $('mk-linea-box').classList.toggle('hidden', demo);
+    $('mk-info').innerHTML = demo ? `🎓 Práctica: se simula el envío a <b>${n}</b> contactos de práctica. No sale nada a WhatsApp.` : `Se enviará a <b>${Math.min(n, cupo)}</b> contactos con OK y sin baja${n > cupo ? ` (hay ${n}, pero tu cupo del mes es ${cupo})` : ''}.<br><span class="muted">Cupo de envíos del mes: ${usado('enviosEsteMes')} de ${limite('limiteEnviosMes')} usados.</span>${!S.lineas.length ? '<br><b style="color:var(--red)">Primero conectá un número en «Números de WhatsApp».</b>' : ''}`;
+  };
+  $('mk-pl').addEventListener('change', info); $('mk-tag').addEventListener('change', info); info();
+}
+async function crearCampana() {
+  const nombre = $('mk-nombre').value.trim(), plId = $('mk-pl').value, pl = S.plantillas.find(p => p.id === plId);
+  if (!nombre) { toast('Poné un nombre a la campaña', true); return; }
+  if (!pl._demo && !S.lineas.length) { toast('Primero conectá un número de WhatsApp.', true); return; }
+  const d = { nombre, plantillaId: plId, etiqueta: $('mk-tag').value, lineaId: pl._demo ? 'demo' : $('mk-linea').value, estado: 'borrador', total: 0, enviados: 0, fallidos: 0, creadoEn: FV.serverTimestamp(), creadoPor: S.user.uid };
+  if (pl._demo) d._demo = true;
+  await nref().collection('campanas').add(d); cerrarModal(); toast('Borrador creado. Revisalo y tocá «Enviar».');
+}
+function confirmarEnvio(id) {
+  const c = S.campanas.find(x => x.id === id), pl = S.plantillas.find(p => p.id === c.plantillaId); if (!c || !pl) return;
+  const n = elegibles(c.etiqueta, !!c._demo).length, cupo = cupoEnvios();
+  abrirModal(c._demo ? `<h3>🎓 Enviar campaña de práctica</h3><p>Se simula el envío a ${n} contactos de práctica. No sale nada a WhatsApp.</p><div class="row"><button class="btn-sm gold" data-act="cp-ejecutar" data-id="${esc(id)}">Simular envío</button><button class="btn-sm outline" data-act="modal-cerrar">Cancelar</button></div>` :
+    `<h3>🚀 Confirmar envío</h3><p>Vas a enviar <b>«${esc(pl.titulo || pl.nombre)}»</b> a <b>${Math.min(n, cupo)}</b> contactos${c.etiqueta ? ' de la etiqueta «' + esc(c.etiqueta) + '»' : ''}.</p>
+    <p class="muted">Cada mensaje cuenta para tu tope mensual (${usado('enviosEsteMes')} de ${limite('limiteEnviosMes')} usados). Solo reciben quienes dieron OK y no se dieron de baja. <b>Mantené esta pantalla abierta hasta que termine</b>; si se corta, podés continuar desde la campaña.</p>
+    ${n > cupo ? `<p style="color:var(--warn);font-weight:700">Hay ${n} contactos pero tu cupo permite ${cupo}. Los demás quedarán afuera.</p>` : ''}
+    <div class="row"><button class="btn-sm gold" data-act="cp-ejecutar" data-id="${esc(id)}" ${n ? '' : 'disabled'}>Sí, enviar ahora</button><button class="btn-sm outline" data-act="modal-cerrar">Cancelar</button></div>`);
+}
+let _enviando = false;
+async function ejecutarCampana(id, reanudar) {
+  if (_enviando) return; const c = S.campanas.find(x => x.id === id); if (!c) return;
+  _enviando = true; cerrarModal();
+  try {
+    if (c._demo) {   // práctica: simulación local
+      const n = elegibles(c.etiqueta, true).length; if (!n) { toast('No hay contactos de práctica con OK', true); return; }
+      await nref().collection('campanas').doc(id).update({ estado: 'enviando', total: n, enviados: 0, fallidos: 0 });
+      for (let i = 1; i <= n; i++) { await new Promise(r => setTimeout(r, 450)); await nref().collection('campanas').doc(id).update({ enviados: i }); }
+      await nref().collection('campanas').doc(id).update({ estado: 'completa', simulada: true }); toast('🎓 Campaña de práctica simulada'); return;
+    }
+    if (!reanudar) {
+      toast('Preparando el envío…');
+      const r = await fnPost('enviarCampana', { campanaId: id, accion: 'iniciar' });
+      if (!r.ok) { toast(r.texto, true); return; }
+      if (r.omitidosPorTope) toast('Se enviará a ' + r.total + '. ' + r.omitidosPorTope + ' quedaron afuera por el tope mensual.', true);
+    }
+    let seguir = true, vueltas = 0;
+    while (seguir && vueltas++ < 1000) {
+      const r = await fnPost('enviarCampana', { campanaId: id, accion: 'lote' });
+      if (!r.ok) { toast(r.texto + ' Podés continuar desde la campaña.', true); return; }
+      seguir = !r.terminada; if (seguir) await new Promise(x => setTimeout(x, 350));
+    }
+    toast('✅ Campaña terminada');
+  } finally { _enviando = false; }
+}
+
+// ============================================================ MI NEGOCIO ============================================================
+const DIAS = [[1, 'L'], [2, 'M'], [3, 'X'], [4, 'J'], [5, 'V'], [6, 'S'], [0, 'D']];
+function renderNegocio() {
+  const n = S.neg || {};
+  if (document.activeElement !== $('neg-nombre')) $('neg-nombre').value = n.nombreNegocio || '';
+  if (document.activeElement !== $('neg-prompt')) $('neg-prompt').value = n.systemPrompt || '';
+  const h = n.horario || { activo: false, dias: [1, 2, 3, 4, 5], desde: '09:00', hasta: '18:00' };
+  $('hor-activo').checked = !!h.activo; $('hor-desde').value = h.desde || '09:00'; $('hor-hasta').value = h.hasta || '18:00';
+  $('hor-dias').innerHTML = DIAS.map(d => `<label style="font-size:13px"><input type="checkbox" class="hor-dia" value="${d[0]}" ${(h.dias || []).includes(d[0]) ? 'checked' : ''}/> ${d[1]}</label>`).join(' ');
+  $('lista-productos').innerHTML = (n.productos || []).length ? n.productos.map((p, i) => `<div class="list-item"><span>${esc(p.nombre)} — ${esc(p.precio)}</span><button class="ico" data-act="prod-del" data-i="${i}">🗑</button></div>`).join('') : '<div class="muted">Sin productos cargados.</div>';
+  $('lista-faqs').innerHTML = (n.faqs || []).length ? n.faqs.map((f, i) => `<div class="list-item"><span><b>${esc(f.pregunta)}</b><br><span class="muted">${esc(f.respuesta)}</span></span><button class="ico" data-act="faq-del" data-i="${i}">🗑</button></div>`).join('') : '<div class="muted">Sin preguntas cargadas.</div>';
+}
+async function guardarNegocio() { await nref().update({ nombreNegocio: $('neg-nombre').value.trim(), systemPrompt: $('neg-prompt').value.trim() }); toast('Guardado'); }
+async function guardarHorario() {
+  const dias = Array.from(document.querySelectorAll('.hor-dia:checked')).map(x => +x.value);
+  await nref().update({ horario: { activo: $('hor-activo').checked, dias, desde: $('hor-desde').value || '09:00', hasta: $('hor-hasta').value || '18:00' } }); toast('Horario guardado');
+}
+async function prodAdd() { const n = $('prod-nombre').value.trim(), p = $('prod-precio').value.trim(); if (!n) return; await nref().update({ productos: FV.arrayUnion({ nombre: n, precio: p }) }); $('prod-nombre').value = ''; $('prod-precio').value = ''; }
+async function faqAdd() { const q = $('faq-pregunta').value.trim(), a = $('faq-respuesta').value.trim(); if (!q || !a) return; await nref().update({ faqs: FV.arrayUnion({ pregunta: q, respuesta: a }) }); $('faq-pregunta').value = ''; $('faq-respuesta').value = ''; }
+async function listaDel(campo, i) { const arr = ((S.neg || {})[campo] || []).slice(); arr.splice(i, 1); await nref().update({ [campo]: arr }); }
+
+// ============================================================ NÚMEROS DE WHATSAPP ============================================================
+function renderLineas() {
+  $('aviso-legacy').classList.toggle('hidden', !(S.neg && S.neg.whatsapp && S.neg.whatsapp.token));
+  $('ln-lista').innerHTML = S.lineas.length ? S.lineas.map(l => `<div class="card"><div class="row" style="justify-content:space-between"><b>📲 ${esc(l.nombre)}</b><span class="tag">Conectado</span></div>
+    <div class="muted">${esc(l.display || '')}${l.verificado ? ' · ' + esc(l.verificado) : ''} · ID ${esc(l.id)}</div>
+    <div class="row" style="margin-top:8px"><button class="btn-sm outline" data-act="ln-datos" data-id="${esc(l.id)}">Ver datos del webhook</button><button class="btn-sm outline" data-act="ln-desconectar" data-id="${esc(l.id)}">Desconectar</button></div></div>`).join('') : '<div class="card"><div class="vacio">Todavía no conectaste ningún número.</div></div>';
+}
+function datosWebhook(r, titulo) {
+  abrirModal(`<h3>${titulo}</h3><p class="muted" style="margin-top:0">Pegá estos dos datos en tu app de Meta: <b>WhatsApp → Configuración → Webhook</b>, y suscribite al campo <b>messages</b>.</p>
+    <div class="field"><label>URL de devolución de llamada</label><code class="copia">${esc(r.webhookUrl)}</code></div><div class="row"><button class="btn-sm" data-act="copiar" data-v="${esc(r.webhookUrl)}">📋 Copiar URL</button></div>
+    <div class="field" style="margin-top:12px"><label>Token de verificación</label><code class="copia">${esc(r.verifyToken)}</code></div><div class="row"><button class="btn-sm" data-act="copiar" data-v="${esc(r.verifyToken)}">📋 Copiar token</button></div>
+    <div class="row" style="margin-top:16px"><button class="btn-sm gold" data-act="modal-cerrar">Listo</button></div>`);
+}
+async function conectarLinea() {
+  const nombre = $('ln-nombre').value.trim(), phoneNumberId = $('ln-phone').value.trim(), token = $('ln-token').value.trim(), msg = $('ln-msg');
+  if (!phoneNumberId || !token) { msg.textContent = 'Completá el Phone Number ID y el token.'; return; }
+  msg.textContent = 'Probando la conexión con Meta…';
+  const r = await fnPost('conectarLinea', { nombre, phoneNumberId, token });
+  if (!r.ok) { msg.textContent = r.texto; return; }
+  msg.textContent = ''; $('ln-token').value = ''; $('ln-phone').value = ''; $('ln-nombre').value = '';
+  datosWebhook(r, '✅ Conectado: ' + esc(r.display || nombre));
+}
+
+// ============================================================ MI EQUIPO ============================================================
+function codigoAzar(n) { const a = new Uint8Array(n); crypto.getRandomValues(a); return Array.from(a).map(x => 'abcdefghijkmnpqrstuvwxyz23456789'[x % 32]).join(''); }
+async function renderEquipo() {
+  const [inv, ag] = await Promise.all([nref().collection('invitaciones').orderBy('creadoEn', 'desc').limit(20).get(), db.collection('usuarios').where('negocioId', '==', S.negocioId).get()]);
+  const pend = inv.docs.filter(d => !d.data().usada);
+  $('eq-invs').innerHTML = pend.length ? '<b style="font-size:13px">Invitaciones sin usar</b>' + pend.map(d => { const url = location.origin + '/centralbotar.html?inv=' + S.negocioId + '.' + d.id; const t = 'Te invito a CentralbotAr, el panel de chats de WhatsApp de mi negocio. Abrí este link e ingresá con tu cuenta: ' + url;
+    return `<div class="list-item" style="flex-wrap:wrap"><span>${esc(d.data().nombre || 'Invitación')} <span class="muted">${esc(fmt(d.data().creadoEn))}</span></span><span class="row"><button class="btn-sm" data-act="copiar" data-v="${esc(url)}">📋 Copiar link</button><a class="btn-sm green" style="text-decoration:none" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(t)}">WhatsApp</a><button class="ico" data-act="eq-revocar" data-id="${esc(d.id)}">🗑</button></span></div>`; }).join('') : '<div class="muted">No hay invitaciones pendientes.</div>';
+  const agentes = ag.docs.filter(d => d.data().rolNegocio === 'agente');
+  $('eq-agentes').innerHTML = agentes.length ? agentes.map(d => `<div class="list-item"><span>${esc(d.data().email || d.id)}</span><button class="btn-sm outline" data-act="eq-quitar" data-id="${esc(d.id)}">Quitar</button></div>`).join('') : '<div class="muted">Todavía no tenés agentes.</div>';
+}
+async function invitar() { const code = codigoAzar(16); await nref().collection('invitaciones').doc(code).set({ usada: false, rol: 'agente', nombre: $('eq-nombre').value.trim(), creadoEn: FV.serverTimestamp() }); $('eq-nombre').value = ''; toast('Invitación creada'); renderEquipo(); }
+
+// ============================================================ CONFIGURACIÓN ============================================================
+function barraUso(etq, u, l) { const p = l ? Math.min(100, Math.round(u / l * 100)) : 0; return `<div style="margin-bottom:12px"><b style="font-size:13px">${etq}</b><div class="barra"><i class="${p >= 100 ? 'red' : p >= 80 ? 'warn' : ''}" style="width:${p}%"></i></div><span class="muted">${u} de ${l} (${p}%)</span></div>`; }
+function renderConfig() {
+  $('cfg-uso').innerHTML = S.esOwner ? barraUso('Respuestas del bot', usado('mensajesEsteMes'), limite('limiteMensajesMes')) + barraUso('Envíos de campañas', usado('enviosEsteMes'), limite('limiteEnviosMes')) + '<p class="muted">Los contadores se reinician solos el día 1 de cada mes. Si necesitás más, pedilo desde tu plan.</p>' : '<p class="muted">Solo el dueño ve el uso del plan.</p>';
+  const u = (function () { try { return localStorage.getItem('centralbotar-ultimo-backup'); } catch (e) { return null; } })(); if (u) $('ultimoBackupFecha').textContent = u;
+}
+
+// ---------- Backup (estándar punto 6) ----------
+function _bkSer(v) { if (v && typeof v === 'object') { if (typeof v.toMillis === 'function' && 'seconds' in v && 'nanoseconds' in v) return { __ts: [v.seconds, v.nanoseconds] }; if (Array.isArray(v)) return v.map(_bkSer); const o = {}; Object.keys(v).forEach(k => { o[k] = _bkSer(v[k]); }); return o; } return v; }
+function _bkRev(v) { if (v && typeof v === 'object') { if (Array.isArray(v)) return v.map(_bkRev); if (Array.isArray(v.__ts) && v.__ts.length === 2) return new TS(v.__ts[0], v.__ts[1]); const o = {}; Object.keys(v).forEach(k => { o[k] = _bkRev(v[k]); }); return o; } return v; }
+async function _bkLeer(ref) { const s = await ref.get(); return s.docs.filter(d => !d.data()._demo).map(d => Object.assign({ _id: d.id }, _bkSer(d.data()))); }
+function _bkIdb(fecha, json) { return new Promise(res => { try { const rq = indexedDB.open('centralbotar-backup', 1); rq.onupgradeneeded = () => { rq.result.createObjectStore('b', { keyPath: 'fecha' }); }; rq.onsuccess = () => { const idb = rq.result, tx = idb.transaction('b', 'readwrite'), st = tx.objectStore('b'); st.put({ fecha, json }); st.getAllKeys().onsuccess = e => { const ks = e.target.result.sort(); while (ks.length > 7) st.delete(ks.shift()); }; tx.oncomplete = () => { idb.close(); res(true); }; tx.onerror = tx.onabort = () => { idb.close(); res(false); }; }; rq.onerror = () => res(false); } catch (e) { res(false); } }); }
+function _bkMsg(m, err) { const el = $('bkMsg'); if (el) { el.textContent = m; el.style.color = err ? '#b91c1c' : '#15803d'; } if (err) console.warn(m); }
+function _bkPuede() { return !!(S.user && S.userDoc && S.negocioId && S.esOwner); }
 async function generarBackup(silencioso) {
   if (!_bkPuede()) { if (!silencioso) _bkMsg('Solo el dueño del negocio puede hacer el backup', true); return; }
   try {
     if (!silencioso) _bkMsg('Preparando backup…');
-    const nref = db.collection('negocios').doc(negocioId);
-    const ns = await nref.get();
-    const neg = ns.exists ? _bkSer(ns.data()) : {};
-    delete neg.whatsapp;                       // credenciales: nunca al archivo
-    const convs = [];
-    const cs = await nref.collection('conversaciones').get();
-    for (const c of cs.docs) {
-      const msgs = await _bkLeer(nref.collection('conversaciones').doc(c.id).collection('mensajes'));
-      convs.push(Object.assign({ _id: c.id }, _bkSer(c.data()), { _mensajes: msgs }));
-    }
-    const fecha = _bkHoy();
-    const json = JSON.stringify({ app: 'CentralbotAr', version: '0.2', fecha: new Date().toISOString(), negocioId: negocioId, negocio: neg, conversaciones: convs });
-    _bkDescargar(json, fecha);
+    const ns = await nref().get(), neg = ns.exists ? _bkSer(ns.data()) : {};
+    const solo = {}; ['nombreNegocio', 'systemPrompt', 'productos', 'faqs', 'horario'].forEach(k => { if (neg[k] !== undefined) solo[k] = neg[k]; });   // sin tokens, sin plan ni contadores
+    const convs = [], cs = await nref().collection('conversaciones').get();
+    for (const c of cs.docs) { if (c.data()._demo) continue; convs.push(Object.assign({ _id: c.id }, _bkSer(c.data()), { _mensajes: await _bkLeer(nref().collection('conversaciones').doc(c.id).collection('mensajes')) })); }
+    const fecha = hoy();
+    const json = JSON.stringify({ app: APP, version: VERSION, fecha: new Date().toISOString(), negocioId: S.negocioId, negocio: solo, contactos: await _bkLeer(nref().collection('contactos')), plantillas: await _bkLeer(nref().collection('plantillas')), campanas: await _bkLeer(nref().collection('campanas')), lineas: (await _bkLeer(nref().collection('lineas'))), conversaciones: convs });
+    descargar(json, 'centralbotar-backup-' + fecha + '.json', 'application/json');
     await _bkIdb(fecha, json);
     try { localStorage.setItem('centralbotar-ultimo-backup', fecha); } catch (e) {}
-    const el = document.getElementById('ultimoBackupFecha'); if (el) el.textContent = fecha;
+    const el = $('ultimoBackupFecha'); if (el) el.textContent = fecha;
     if (!silencioso) _bkMsg('✅ Backup descargado');
-  } catch (e) { console.warn('generarBackup', e); if (!silencioso) _bkMsg('Error al generar backup: ' + (e.code || e.message), true); }
+  } catch (e) { console.warn('generarBackup', e); logError('backup', e.code || e.message); if (!silencioso) _bkMsg('Error al generar backup: ' + (e.code || e.message), true); }
 }
 async function restaurarBackup(input) {
-  const file = input.files && input.files[0];
-  if (!file) return;
+  const file = input.files && input.files[0]; if (!file) return;
   try {
     if (!_bkPuede()) { _bkMsg('Solo el dueño del negocio puede restaurar', true); return; }
     const bk = JSON.parse(await file.text());
-    if (bk.app !== 'CentralbotAr' || !bk.negocio) { _bkMsg('El archivo no es un backup de CentralbotAr', true); return; }
-    const nref = db.collection('negocios').doc(negocioId);
-    const ops = [];
-    // del negocio solo vuelven los datos propios; plan/límites, contador de mensajes y WhatsApp quedan como están
-    const n = bk.negocio, datos = {};
-    ['nombreNegocio', 'systemPrompt', 'productos', 'faqs'].forEach(function (k) { if (n[k] !== undefined) datos[k] = _bkRev(n[k]); });
-    ops.push([nref, datos]);
-    (bk.conversaciones || []).forEach(function (c) {
-      const r = Object.assign({}, c), id = r._id, ms = r._mensajes || []; delete r._id; delete r._mensajes; if (!id) return;
-      ops.push([nref.collection('conversaciones').doc(id), _bkRev(r)]);
-      ms.forEach(function (m) { const y = Object.assign({}, m), mid = y._id; delete y._id; if (mid) ops.push([nref.collection('conversaciones').doc(id).collection('mensajes').doc(mid), _bkRev(y)]); });
-    });
-    if (!confirm('Se van a volver a cargar los datos del negocio y ' + (bk.conversaciones || []).length + ' conversación(es) (' + (ops.length - 1) + ' registros). Lo que ya existe se reemplaza por lo del archivo; el resto queda como está. La conexión de WhatsApp no se toca. ¿Continuar?')) return;
+    if (bk.app !== APP || !bk.negocio) { _bkMsg('El archivo no es un backup de CentralbotAr', true); return; }
+    const ops = [], n = bk.negocio, datos = {};
+    ['nombreNegocio', 'systemPrompt', 'productos', 'faqs', 'horario'].forEach(k => { if (n[k] !== undefined) datos[k] = _bkRev(n[k]); });
+    ops.push([nref(), datos]);
+    const sub = (col, lista) => (lista || []).forEach(x => { const r = Object.assign({}, x), id = r._id; delete r._id; if (id) ops.push([nref().collection(col).doc(id), _bkRev(r)]); });
+    sub('contactos', bk.contactos); sub('plantillas', bk.plantillas);
+    (bk.conversaciones || []).forEach(c => { const r = Object.assign({}, c), id = r._id, ms2 = r._mensajes || []; delete r._id; delete r._mensajes; if (!id) return; ops.push([nref().collection('conversaciones').doc(id), _bkRev(r)]); ms2.forEach(m => { const y = Object.assign({}, m), mid = y._id; delete y._id; if (mid) ops.push([nref().collection('conversaciones').doc(id).collection('mensajes').doc(mid), _bkRev(y)]); }); });
+    if (!confirm('Se van a volver a cargar ' + (ops.length - 1) + ' registros (contactos, plantillas y chats). Lo que ya existe se reemplaza por lo del archivo; el resto queda como está. Los números de WhatsApp, el plan y los contadores no se tocan. ¿Continuar?')) return;
     _bkMsg('Restaurando…');
-    await _bkCommit(ops);
-    _bkMsg('✅ Backup restaurado (' + ops.length + ' registros)');
-    setTimeout(function () { location.reload(); }, 1500);
-  } catch (e) { console.warn('restaurarBackup', e); _bkMsg('Error al restaurar: ' + (e.code || e.message), true); }
+    for (let i = 0; i < ops.length; i += 400) { const b = db.batch(); ops.slice(i, i + 400).forEach(o => b.set(o[0], o[1], { merge: true })); await b.commit(); }
+    _bkMsg('✅ Backup restaurado (' + ops.length + ' registros)'); setTimeout(() => location.reload(), 1500);
+  } catch (e) { console.warn('restaurarBackup', e); logError('restaurar', e.code || e.message); _bkMsg('Error al restaurar: ' + (e.code || e.message), true); }
   finally { input.value = ''; }
 }
 function chequearBackupDiario() {
-  if (!_bkPuede()) return;
-  let ultimo = null; try { ultimo = localStorage.getItem('centralbotar-ultimo-backup'); } catch (e) {}
-  const el = document.getElementById('ultimoBackupFecha'); if (el && ultimo) el.textContent = ultimo;
-  if (ultimo !== _bkHoy()) setTimeout(function () { generarBackup(true); }, 8000);
+  if (!_bkPuede()) return; let ultimo = null; try { ultimo = localStorage.getItem('centralbotar-ultimo-backup'); } catch (e) {}
+  const el = $('ultimoBackupFecha'); if (el && ultimo) el.textContent = ultimo;
+  if (ultimo !== hoy()) generarBackup(true);
 }
-// ══════════ FIN BACKUP ══════════
 
-// ───────── NAVEGACIÓN ─────────
-document.querySelectorAll('.nav-item').forEach(item => {
-  item.addEventListener('click', () => {
-    document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
-    item.classList.add('active');
-    document.querySelectorAll('.page').forEach(p => p.classList.add('hidden'));
-    document.getElementById('page-' + item.dataset.page).classList.remove('hidden');
-  });
+// ---------- Modo práctica (estándar punto 5): todo marcado _demo:true; «quitar» borra solo eso ----------
+async function cargarPractica() {
+  const m = $('pr-msg'); m.textContent = 'Cargando…';
+  const ahora = Date.now(), c = [['Lucía Gómez', 1, ['práctica', 'cámaras'], true], ['Martín Pérez', 2, ['práctica', 'cámaras'], true], ['Carla Díaz', 3, ['práctica', 'alarmas'], true], ['Jorge Ruiz', 4, ['práctica'], true, true], ['Sofía Álvarez', 5, ['práctica', 'alarmas'], true], ['Pedro Sosa', 6, ['práctica'], false]];
+  const b = db.batch();
+  c.forEach(x => { const tel = '54911000000' + String(x[1]).padStart(2, '0'); b.set(nref().collection('contactos').doc(tel), { nombre: x[0], telefono: tel, etiquetas: x[2], origen: 'practica', baja: !!x[4], creadoEn: FV.serverTimestamp(), consentimiento: x[3] ? { estado: 'si', fuente: 'practica', fecha: FV.serverTimestamp() } : { estado: 'desconocido', fuente: 'practica' }, _demo: true }); });
+  b.set(nref().collection('plantillas').doc('demo_oferta'), { titulo: 'Oferta de práctica', nombre: 'oferta_practica', idioma: 'es_AR', categoria: 'MARKETING', texto: 'Hola {{1}}! Esta semana tenés {{2}} en cámaras de seguridad. ¿Querés que te pasemos precios?', vars: [{ tipo: 'nombre', valor: '' }, { tipo: 'fijo', valor: '15% de descuento' }], estado: 'aprobada', creadoEn: FV.serverTimestamp(), _demo: true });
+  const convs = [['demo_1', 'Lucía Gómez', 'derivado', true, 'Se me activó la alarma y no puedo apagarla', [['cliente', 'Hola! Se me activó la alarma y no puedo apagarla'], ['bot', 'Ya avisamos al equipo, te contactan enseguida. Mientras tanto, ¿la sirena sigue sonando?'], ['cliente', 'Sí, sigue']]],
+    ['demo_2', 'Martín Pérez', 'pendiente_humano', false, '¿Pueden hacerme un presupuesto para 8 cámaras?', [['cliente', 'Buenas, ¿pueden hacerme un presupuesto para 8 cámaras en un local?']]],
+    ['demo_3', 'Carla Díaz', 'respondido_auto', false, 'Atendemos de lunes a viernes de 9 a 18', [['cliente', '¿Qué horario tienen?'], ['bot', 'Atendemos de lunes a viernes de 9 a 18. ¡Te esperamos!']]]];
+  convs.forEach(x => { const cr = nref().collection('conversaciones').doc(x[0]); b.set(cr, { nombre: x[1], telefono: '5491100000999', lineaId: 'demo', estado: x[2], urgente: x[3], modoManual: false, ultimoMensaje: x[5][x[5].length - 1][1], ultimoMensajeFecha: TS.fromMillis(ahora), ultimoMensajeCliente: TS.fromMillis(ahora), creadoEn: FV.serverTimestamp(), _demo: true });
+    x[5].forEach((mm, i) => b.set(cr.collection('mensajes').doc('m' + i), { texto: mm[1], autor: mm[0], timestamp: TS.fromMillis(ahora - (x[5].length - i) * 60000), ok: true, _demo: true })); });
+  await b.commit(); m.textContent = '✅ Datos de práctica cargados: mirá Bandeja, Contactos y probá una campaña con la plantilla 🎓.'; toast('Práctica cargada');
+}
+async function quitarPractica() {
+  if (!confirm('Se borran solo los datos marcados como práctica. Tus datos reales no se tocan. ¿Seguir?')) return;
+  const m = $('pr-msg'); m.textContent = 'Quitando…'; let n = 0;
+  for (const col of ['contactos', 'plantillas', 'campanas']) { const s = await nref().collection(col).where('_demo', '==', true).get(); for (const d of s.docs) { await d.ref.delete(); n++; } }
+  const cs = await nref().collection('conversaciones').where('_demo', '==', true).get();
+  for (const d of cs.docs) { const ms2 = await d.ref.collection('mensajes').get(); for (const x of ms2.docs) await x.ref.delete(); await d.ref.delete(); n++; }
+  if (S.convId && cs.docs.some(d => d.id === S.convId)) { S.convId = null; $('chat-area').innerHTML = '<div class="empty-inbox">Elegí una conversación de la lista</div>'; }
+  m.textContent = '✅ Práctica quitada (' + n + ' registros).'; toast('Práctica quitada');
+}
+
+// ============================================================ ADMIN (oculto) ============================================================
+async function renderAdmin() {
+  const cont = $('adm-lista'); cont.innerHTML = '<div class="vacio">Cargando…</div>';
+  try {
+    const s = await db.collection('negocios').get();
+    const filas = await Promise.all(s.docs.map(async d => { const n = d.data(); let email = ''; try { const u = await db.collection('usuarios').doc(n.ownerUid || d.id).get(); email = u.exists ? u.data().email : ''; } catch (e) {} return { id: d.id, n, email }; }));
+    cont.innerHTML = filas.map(f => { const n = f.n, dm = n.demoHasta, dias = dm && dm.toMillis ? Math.ceil((dm.toMillis() - Date.now()) / 864e5) : null;
+      const est = n.banned ? '<span class="tag red">Pausada</span>' : dm === null ? '<span class="tag">Cliente</span>' : dias === undefined || dias === null ? '<span class="tag gris">Sin prueba</span>' : dias < 0 ? '<span class="tag red">Prueba vencida</span>' : `<span class="tag warn">Prueba: ${dias} día(s)</span>`;
+      const mes = n.mesClave === mesActual();
+      return `<div class="card"><div class="row" style="justify-content:space-between"><b>${esc(n.nombreNegocio || '(sin nombre)')}</b>${est}</div><div class="muted">${esc(f.email)} · Bot ${mes ? (n.mensajesEsteMes || 0) : 0}/${n.features && n.features.limiteMensajesMes != null ? n.features.limiteMensajesMes : DEF.limiteMensajesMes} · Envíos ${mes ? (n.enviosEsteMes || 0) : 0}/${n.features && n.features.limiteEnviosMes != null ? n.features.limiteEnviosMes : DEF.limiteEnviosMes}</div>
+      <div class="row" style="margin-top:8px"><button class="btn-sm outline" data-act="adm-dias" data-id="${esc(f.id)}" data-v="7" ${dm === null ? 'disabled' : ''}>+7 días</button><button class="btn-sm outline" data-act="adm-dias" data-id="${esc(f.id)}" data-v="30" ${dm === null ? 'disabled' : ''}>+30 días</button><button class="btn-sm gold" data-act="adm-cliente" data-id="${esc(f.id)}" ${dm === null ? 'disabled' : ''}>Pasar a cliente</button><button class="btn-sm outline" data-act="adm-envios" data-id="${esc(f.id)}">+500 envíos</button></div></div>`; }).join('') || '<div class="vacio">No hay negocios.</div>';
+  } catch (e) { cont.innerHTML = '<div class="vacio">Sin permiso o error: ' + esc(e.code || e.message) + '</div>'; }
+}
+async function admDias(id, dias) {
+  const r = db.collection('negocios').doc(id), s = await r.get(), cur = s.data().demoHasta, base = Math.max(Date.now(), cur && cur.toMillis ? cur.toMillis() : 0);
+  await r.update({ demoHasta: TS.fromMillis(base + dias * 864e5) }); toast('+' + dias + ' días'); renderAdmin();
+}
+
+// ============================================================ ACCIONES (un solo manejador de toques) ============================================================
+const ACT = {
+  nav: el => showPage(el.dataset.p),
+  'modal-cerrar': () => cerrarModal(), copiar: el => copiar(el.dataset.v), tema: () => cambiarTema(),
+  'filtro-bandeja': el => { S.filtroBandeja = el.dataset.v; renderBandeja(); },
+  'conv-abrir': el => abrirConversacion(el.dataset.id), 'chat-volver': () => { $('inbox-wrap').classList.remove('chat-open'); S.convId = null; renderConvList(); },
+  'chat-enviar': chatEnviar, 'chat-manual': chatManual, 'chat-estado': el => chatEstado(el.dataset.v),
+  'ct-nuevo': () => modalContacto(), 'ct-editar': el => modalContacto(el.dataset.id), 'ct-guardar': el => guardarContacto(el.dataset.id), 'ct-borrar': el => borrarContacto(el.dataset.id),
+  'ct-importar': modalImportar, 'ct-exportar': exportarContactos, 'im-revisar': revisarImportacion, 'im-importar': ejecutarImportacion,
+  'pl-nueva': () => modalPlantilla(), 'pl-editar': el => modalPlantilla(el.dataset.id), 'pl-guardar': el => guardarPlantilla(el.dataset.id),
+  'pl-copiar': el => { const p = S.plantillas.find(x => x.id === el.dataset.id); if (p) copiar(p.texto); },
+  'pl-borrar': async el => { if (confirm('¿Borrar esta plantilla?')) { await nref().collection('plantillas').doc(el.dataset.id).delete(); toast('Plantilla borrada'); } },
+  'cp-nueva': modalCampana, 'cp-crear': crearCampana, 'cp-enviar': el => confirmarEnvio(el.dataset.id), 'cp-ejecutar': el => ejecutarCampana(el.dataset.id, false), 'cp-continuar': el => ejecutarCampana(el.dataset.id, true),
+  'cp-borrar': async el => { if (confirm('¿Borrar esta campaña? Solo se borra el registro.')) { await nref().collection('campanas').doc(el.dataset.id).delete(); toast('Campaña borrada'); } },
+  'neg-guardar': guardarNegocio, 'hor-guardar': guardarHorario, 'prod-add': prodAdd, 'faq-add': faqAdd, 'prod-del': el => listaDel('productos', +el.dataset.i), 'faq-del': el => listaDel('faqs', +el.dataset.i),
+  'ln-conectar': conectarLinea,
+  'ln-datos': async el => { const r = await fnPost('conectarLinea', { accion: 'datos', phoneNumberId: el.dataset.id }); if (!r.ok) toast(r.texto, true); else datosWebhook(r, 'Datos del webhook'); },
+  'ln-desconectar': async el => { if (!confirm('¿Desconectar este número? Dejás de recibir y enviar mensajes por él hasta volver a conectarlo.')) return; const r = await fnPost('conectarLinea', { accion: 'desconectar', phoneNumberId: el.dataset.id }); toast(r.ok ? 'Número desconectado' : r.texto, !r.ok); },
+  'eq-invitar': invitar, 'eq-revocar': async el => { await nref().collection('invitaciones').doc(el.dataset.id).delete(); renderEquipo(); },
+  'eq-quitar': async el => { if (confirm('¿Quitar a este agente? Pierde el acceso.')) { await db.collection('usuarios').doc(el.dataset.id).delete(); renderEquipo(); } },
+  'bk-ahora': () => generarBackup(false), 'bk-restaurar': () => $('bk-file').click(), 'pr-cargar': cargarPractica, 'pr-quitar': quitarPractica,
+  'adm-dias': el => admDias(el.dataset.id, +el.dataset.v),
+  'adm-cliente': async el => { await db.collection('negocios').doc(el.dataset.id).update({ demoHasta: null }); toast('Pasó a cliente'); renderAdmin(); },
+  'adm-envios': async el => { await db.collection('negocios').doc(el.dataset.id).update({ 'features.limiteEnviosMes': FV.increment(500) }); toast('+500 envíos'); renderAdmin(); }
+};
+document.addEventListener('click', e => {
+  if (e.target === $('modal')) { cerrarModal(); return; }
+  const el = e.target.closest('[data-act]'); if (!el || !ACT[el.dataset.act]) return;
+  Promise.resolve().then(() => ACT[el.dataset.act](el, e)).catch(err => { logError('acción ' + el.dataset.act, err && (err.code || err.message)); toast('Algo falló: ' + (err && (err.code || err.message)), true); });
 });
-
-// ───────── MI NEGOCIO ─────────
-let negocioData = null;
-async function cargarPantallaNegocio() {
-  const negSnap = await db.collection('negocios').doc(negocioId).get();
-  negocioData = negSnap.data() || {};
-  document.getElementById('neg-nombre').value = negocioData.nombreNegocio || '';
-  document.getElementById('neg-prompt').value = negocioData.systemPrompt || '';
-  renderProductos();
-  renderFaqs();
-}
-
-function renderProductos() {
-  const cont = document.getElementById('lista-productos');
-  const prods = negocioData.productos || [];
-  cont.innerHTML = prods.length ? prods.map((p, i) => `
-    <div class="list-item"><span>${p.nombre} — $${p.precio}</span><button class="btn-sm outline" data-del-prod="${i}">Quitar</button></div>
-  `).join('') : '<p style="font-size:13px;color:var(--muted)">Sin productos cargados.</p>';
-  cont.querySelectorAll('[data-del-prod]').forEach(b => b.addEventListener('click', async () => {
-    prods.splice(Number(b.dataset.delProd), 1);
-    await db.collection('negocios').doc(negocioId).update({ productos: prods });
-    renderProductos();
-  }));
-}
-document.getElementById('btn-add-producto').addEventListener('click', async () => {
-  const nombre = document.getElementById('prod-nombre').value.trim();
-  const precio = document.getElementById('prod-precio').value.trim();
-  if (!nombre) return;
-  negocioData.productos = negocioData.productos || [];
-  negocioData.productos.push({ nombre, precio });
-  await db.collection('negocios').doc(negocioId).update({ productos: negocioData.productos });
-  document.getElementById('prod-nombre').value = ''; document.getElementById('prod-precio').value = '';
-  renderProductos();
-});
-
-function renderFaqs() {
-  const cont = document.getElementById('lista-faqs');
-  const faqs = negocioData.faqs || [];
-  cont.innerHTML = faqs.length ? faqs.map((f, i) => `
-    <div class="list-item"><span><strong>${f.pregunta}</strong> — ${f.respuesta}</span><button class="btn-sm outline" data-del-faq="${i}">Quitar</button></div>
-  `).join('') : '<p style="font-size:13px;color:var(--muted)">Sin preguntas frecuentes cargadas.</p>';
-  cont.querySelectorAll('[data-del-faq]').forEach(b => b.addEventListener('click', async () => {
-    faqs.splice(Number(b.dataset.delFaq), 1);
-    await db.collection('negocios').doc(negocioId).update({ faqs });
-    renderFaqs();
-  }));
-}
-document.getElementById('btn-add-faq').addEventListener('click', async () => {
-  const pregunta = document.getElementById('faq-pregunta').value.trim();
-  const respuesta = document.getElementById('faq-respuesta').value.trim();
-  if (!pregunta || !respuesta) return;
-  negocioData.faqs = negocioData.faqs || [];
-  negocioData.faqs.push({ pregunta, respuesta });
-  await db.collection('negocios').doc(negocioId).update({ faqs: negocioData.faqs });
-  document.getElementById('faq-pregunta').value = ''; document.getElementById('faq-respuesta').value = '';
-  renderFaqs();
-});
-
-document.getElementById('btn-guardar-negocio').addEventListener('click', async () => {
-  const btn = document.getElementById('btn-guardar-negocio'); btn.disabled = true; btn.textContent = 'Guardando...';
-  await db.collection('negocios').doc(negocioId).update({
-    nombreNegocio: document.getElementById('neg-nombre').value.trim(),
-    systemPrompt: document.getElementById('neg-prompt').value.trim(),
-  });
-  btn.disabled = false; btn.textContent = '✅ Guardado';
-  setTimeout(() => { btn.textContent = '💾 Guardar datos del negocio'; }, 2000);
-});
-
-// ───────── CONECTAR WHATSAPP ─────────
-document.getElementById('btn-guardar-whatsapp').addEventListener('click', async () => {
-  const phoneNumberId = document.getElementById('wa-phoneid').value.trim();
-  const token = document.getElementById('wa-token').value.trim();
-  if (!phoneNumberId || !token) { alert('Completá los dos campos.'); return; }
-  const verifyToken = 'cba_' + Math.random().toString(36).slice(2, 12);
-  const btn = document.getElementById('btn-guardar-whatsapp'); btn.disabled = true; btn.textContent = 'Guardando...';
-  await db.collection('negocios').doc(negocioId).update({
-    whatsapp: { phoneNumberId, token, verifyToken },
-  });
-  const urlWebhook = `https://WORKER-CENTRALBOTAR.rgaraventa.workers.dev?negocioId=${negocioId}`; // ← reemplazar con URL del Cloudflare Worker
-  document.getElementById('wa-url').value = urlWebhook;
-  document.getElementById('wa-verify').value = verifyToken;
-  document.getElementById('wa-resultado').style.display = 'block';
-  btn.disabled = false; btn.textContent = '✅ Guardado';
-  setTimeout(() => { btn.textContent = '💾 Guardar y generar datos del webhook'; }, 2000);
-});
-
-// ───────── BANDEJA DE CHATS ─────────
-function iniciarBandeja() {
-  if (unsubConvs) unsubConvs();
-  unsubConvs = db.collection('negocios').doc(negocioId).collection('conversaciones')
-    .orderBy('ultimoMensajeFecha', 'desc')
-    .onSnapshot(snap => {
-      conversaciones = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      renderConvList();
-    }, err => {
-      document.getElementById('conv-list').innerHTML = `<div class="empty-inbox">Error: ${err.message}</div>`;
-    });
-}
-
-function renderConvList() {
-  const cont = document.getElementById('conv-list');
-  if (!conversaciones.length) { cont.innerHTML = '<div class="empty-inbox">Todavía no llegó ningún mensaje.</div>'; return; }
-  cont.innerHTML = conversaciones.map(c => `
-    <div class="conv-row ${c.id === convActivaId ? 'active' : ''}" data-id="${c.id}">
-      <div class="name">${(c.nombre || c.id)}</div>
-      <div class="preview">${(c.ultimoMensaje || '').slice(0, 50)}</div>
-    </div>
-  `).join('');
-  cont.querySelectorAll('.conv-row').forEach(row => row.addEventListener('click', () => abrirConversacion(row.dataset.id)));
-}
-
-function abrirConversacion(telefono) {
-  convActivaId = telefono;
-  renderConvList();
-  const conv = conversaciones.find(c => c.id === telefono);
-  const area = document.getElementById('chat-area');
-  area.innerHTML = `
-    <div class="chat-header">
-      <div><strong>${conv.nombre || telefono}</strong><div style="font-size:12px;color:var(--muted)">${telefono}</div></div>
-      <button class="btn-sm ${conv.modoManual ? 'gold' : 'outline'}" id="btn-modo-manual">${conv.modoManual ? '🤖 Devolver al bot' : '🙋 Tomar control'}</button>
-    </div>
-    <div class="chat-msgs" id="chat-msgs"><div class="empty-inbox">Cargando mensajes...</div></div>
-    <div class="chat-input">
-      <input id="chat-input-text" placeholder="Escribí una respuesta..."/>
-      <button class="btn-sm gold" id="btn-enviar-manual">Enviar</button>
-    </div>
-  `;
-  document.getElementById('btn-modo-manual').addEventListener('click', async () => {
-    await db.collection('negocios').doc(negocioId).collection('conversaciones').doc(telefono).update({ modoManual: !conv.modoManual });
-  });
-  document.getElementById('btn-enviar-manual').addEventListener('click', () => enviarManual(telefono));
-  document.getElementById('chat-input-text').addEventListener('keydown', e => { if (e.key === 'Enter') enviarManual(telefono); });
-
-  if (unsubMsgs) unsubMsgs();
-  unsubMsgs = db.collection('negocios').doc(negocioId).collection('conversaciones').doc(telefono)
-    .collection('mensajes').orderBy('timestamp', 'asc')
-    .onSnapshot(snap => {
-      const msgsEl = document.getElementById('chat-msgs');
-      if (!msgsEl) return;
-      msgsEl.innerHTML = snap.docs.map(d => {
-        const m = d.data();
-        return `<div class="bubble ${m.autor}">${m.texto}</div>`;
-      }).join('');
-      msgsEl.scrollTop = msgsEl.scrollHeight;
-    });
-}
-
-async function enviarManual(telefono) {
-  const input = document.getElementById('chat-input-text');
-  const texto = input.value.trim();
-  if (!texto) return;
-  input.value = '';
-  // NOTA: esto guarda el mensaje en Firestore, pero todavía NO lo envía de
-  // verdad a WhatsApp — falta la función de Netlify para el envío saliente.
-  // Pendiente de la próxima versión.
-  await db.collection('negocios').doc(negocioId).collection('conversaciones').doc(telefono)
-    .collection('mensajes').add({ texto, autor: 'humano', timestamp: firebase.firestore.FieldValue.serverTimestamp() });
-  await db.collection('negocios').doc(negocioId).collection('conversaciones').doc(telefono)
-    .update({ ultimoMensaje: texto, ultimoMensajeFecha: firebase.firestore.FieldValue.serverTimestamp() });
-}
+$('bk-file').addEventListener('change', e => restaurarBackup(e.target));
+window.addEventListener('keydown', e => { if (e.key === 'Escape') cerrarModal(); });
 </script>
 <script>
 if ('serviceWorker' in navigator) {
-  window.addEventListener('load', function() {
-    navigator.serviceWorker.register('/sw.js').catch(function(e){console.log('SW:',e);});
-  });
+  window.addEventListener('load', function () { navigator.serviceWorker.register('/sw.js').catch(function (e) { console.log('SW:', e); }); });
 }
 </script>
 </body>

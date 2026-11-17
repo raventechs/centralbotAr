@@ -2,5 +2,21 @@
   functions = "netlify/functions"
   publish = "."
 
+[build.environment]
+  NODE_VERSION = "20"
+
+[functions]
+  node_bundler = "esbuild"
+
 [[plugins]]
   package = "@netlify/plugin-functions-install-core"
+
+# El service worker y los HTML no se guardan en caché del CDN: las versiones nuevas llegan enseguida
+[[headers]]
+  for = "/sw.js"
+  [headers.values]
+    Cache-Control = "no-cache"
+[[headers]]
+  for = "/centralbotar.html"
+  [headers.values]
+    Cache-Control = "no-cache"

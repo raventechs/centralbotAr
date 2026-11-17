@@ -1,24 +1,22 @@
-/* Service Worker — CentralbotAR | RavenTechs | 02/08/2026 */
-var CACHE = 'centralbotar-pwa-v1';
-var SHELL = ['/', '/centralbotar.html', '/manifest.json'];
-self.addEventListener('install', function(e) {
-  e.waitUntil(caches.open(CACHE).then(function(c) {
-    return c.addAll(SHELL.map(function(u) { return new Request(u, {mode:'no-cors'}); }));
-  }).then(function() { return self.skipWaiting(); }));
+/* Service Worker — CentralbotAr v1.0 | RavenTechs | red primero, caché solo como respaldo sin conexión */
+var CACHE = 'centralbotar-pwa-v3';
+var SHELL = ['/centralbotar.html', '/manifest.json'];
+self.addEventListener('install', function (e) {
+  e.waitUntil(caches.open(CACHE).then(function (c) { return c.addAll(SHELL); }).catch(function () {}).then(function () { return self.skipWaiting(); }));
 });
-self.addEventListener('activate', function(e) {
-  e.waitUntil(caches.keys().then(function(keys) {
-    return Promise.all(keys.filter(function(k) { return k !== CACHE; }).map(function(k) { return caches.delete(k); }));
-  }).then(function() { return self.clients.claim(); }));
+self.addEventListener('activate', function (e) {
+  e.waitUntil(caches.keys().then(function (keys) {
+    return Promise.all(keys.filter(function (k) { return k !== CACHE; }).map(function (k) { return caches.delete(k); }));
+  }).then(function () { return self.clients.claim(); }));
 });
-self.addEventListener('fetch', function(e) {
-  var url = e.request.url;
-  if (url.indexOf('firestore')!==-1||url.indexOf('firebase')!==-1||url.indexOf('googleapis')!==-1||url.indexOf('gstatic')!==-1) return;
-  e.respondWith(caches.match(e.request).then(function(cached) {
-    var net = fetch(e.request).then(function(res) {
-      if (res && res.status===200 && e.request.method==='GET') { var c=res.clone(); caches.open(CACHE).then(function(ca){ca.put(e.request,c);}); }
-      return res;
-    }).catch(function() { return cached; });
-    return cached || net;
+self.addEventListener('fetch', function (e) {
+  var req = e.request, url = req.url;
+  if (req.method !== 'GET') return;
+  if (url.indexOf('/.netlify/') !== -1 || /firestore|firebase|googleapis|gstatic|google\.com|anthropic|facebook/.test(url)) return;
+  e.respondWith(fetch(req).then(function (res) {
+    if (res && res.status === 200 && url.indexOf(self.location.origin) === 0) { var c = res.clone(); caches.open(CACHE).then(function (ca) { ca.put(req, c); }); }
+    return res;
+  }).catch(function () {
+    return caches.match(req).then(function (m) { return m || caches.match('/centralbotar.html'); });
   }));
 });

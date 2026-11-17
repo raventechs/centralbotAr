@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="es"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Guía de CentralbotAr</title>
+<style>body{font-family:system-ui,Arial,sans-serif;max-width:760px;margin:0 auto;padding:20px;color:#1a1a2e;line-height:1.55}h1{color:#8E44AD}h2{margin-top:28px;border-bottom:2px solid #eee;padding-bottom:4px}.caja{background:#f6f0fa;border-left:4px solid #8E44AD;padding:10px 14px;border-radius:6px;margin:12px 0}.ojo{background:#fff6e0;border-left:4px solid #e0a000;padding:10px 14px;border-radius:6px;margin:12px 0}li{margin:4px 0}</style></head><body>
+<h1>💬 CentralbotAr — Guía rápida</h1>
+<p>CentralbotAr atiende tu WhatsApp: responde las preguntas frecuentes, te avisa cuando una persona necesita que le contestes vos, y te deja mandar ofertas a quienes ya te consultaron.</p>
+
+<h2>1. Primeros pasos</h2>
+<ol><li>Entrá a <b>centralbotar.raventechsapp.com</b> con tu cuenta de Google o con tu mail.</li><li>Tenés <b>14 días de prueba gratis</b>. Arriba ves cuántos días te quedan.</li><li>Andá a <b>Configuración → Modo práctica → Cargar datos de práctica</b> para probar todo sin escribirle a nadie. Cuando termines, tocá <b>Quitar práctica</b>.</li></ol>
+
+<h2>2. Cargá tu negocio</h2>
+<p>En <b>Mi negocio</b> poné el nombre, cómo querés que hable el bot, tus productos con precio y las <b>preguntas frecuentes</b> (horarios, zonas, formas de pago). Cuanto mejor las cargues, mejor responde.</p>
+<div class="caja"><b>Horario de atención:</b> el bot responde las preguntas frecuentes siempre. Fuera de horario responde todo y te deja el aviso. En horario, si la consulta no es una pregunta frecuente (presupuestos, urgencias, reclamos), <b>espera a que le contestes vos</b> y aparece como «Esperándote» en la Bandeja.</div>
+
+<h2>3. Conectar un número de WhatsApp</h2>
+<p>En <b>Números de WhatsApp</b> completás: nombre, <b>Phone Number ID</b> y un <b>token permanente</b> de Meta. Al tocar Conectar, la app prueba el token y te muestra dos datos (URL y token de verificación) para pegar en Meta → WhatsApp → Configuración → Webhook, suscribiéndote al campo <b>messages</b>.</p>
+<div class="ojo">El token permanente se crea en Meta Business → Usuarios del sistema. Nunca lo compartas: queda guardado solo en el servidor y no se ve en pantalla.</div>
+
+<h2>4. Bandeja de chats</h2>
+<ul><li><b>🚨 Urgente / 🙋 Derivado / ⏳ Esperándote:</b> te necesitan a vos.</li><li><b>🤖 Bot:</b> ya respondió el bot.</li><li>Tocá <b>Tomar control</b> para que el bot deje de contestar ese chat; <b>Devolver al bot</b> lo reactiva.</li><li>WhatsApp solo permite escribir libremente <b>dentro de las 24 horas</b> del último mensaje del cliente. Pasado ese tiempo, usá una plantilla desde una campaña.</li></ul>
+
+<h2>5. Contactos</h2>
+<ul><li>Se cargan solos cuando alguien te escribe, o importando tu planilla (pegá las celdas o subí un .csv con nombre, teléfono y etiquetas).</li><li><b>✅ Con OK:</b> la persona aceptó recibir mensajes. Solo ellos entran en campañas. Al importar, tildá la confirmación solo si de verdad aceptaron.</li><li>Si alguien escribe <b>BAJA</b> o <b>STOP</b>, se marca como baja automáticamente y no recibe más campañas. Si escribe <b>ALTA</b>, vuelve.</li></ul>
+
+<h2>6. Plantillas y campañas</h2>
+<ol><li>En <b>Plantillas</b> escribí el texto con datos variables ({{1}} = nombre, {{2}} = texto fijo, etc.). Tocá <b>Copiar texto para Meta</b>, creala en Meta (Administrar plantillas) y cuando Meta la apruebe, marcala como <b>Aprobada</b> acá.</li><li>En <b>Campañas</b> tocá Nueva campaña: elegí plantilla, etiqueta y número. Revisá cuántos reciben y tocá <b>Enviar</b>.</li><li><b>Mantené la pantalla abierta</b> hasta que termine. Si se corta, tocá <b>Continuar envío</b>: nadie recibe el mensaje dos veces.</li></ol>
+<div class="caja"><b>Tope mensual:</b> cada negocio tiene un cupo de envíos por mes (se reinicia el día 1) y te avisa al llegar al 80 %.</div>
+
+<h2>7. Mi equipo</h2>
+<p>En <b>Mi equipo → Crear invitación</b> se genera un link de un solo uso. Mandáselo por WhatsApp a tu empleado: entra con su cuenta y ve la Bandeja y los contactos, pero no puede cambiar la configuración ni mandar campañas.</p>
+
+<h2>8. Backup</h2>
+<p>La app guarda una copia sola una vez por día al entrar (contactos, plantillas y chats). También podés bajarla en <b>Configuración → Descargar backup ahora</b> y restaurarla desde un archivo. Los tokens de WhatsApp nunca van en el backup.</p>
+
+<h2>9. Instalarla en el celular</h2>
+<p>Abrila en Chrome y tocá <b>Instalar</b> (o menú ⋮ → Agregar a pantalla principal). Queda como una app.</p>
+
+<h2>10. Si algo falla</h2>
+<p>La app registra los errores sola. Anotá qué estabas haciendo y avisá a tu proveedor RavenTechs.</p>
+</body></html>
